@@ -43,7 +43,8 @@ Paths are relative to the task JSON. Initialize without making any model calls:
 
 ```bash
 uv run nano-mle init workspaces/example --task task.json --policy greedy \
-  --max-expansions 3 --max-explorations 5 --max-evaluations 10 --max-repairs 1
+  --max-expansions 3 --max-explorations 5 --max-evaluations 10 --max-repairs 1 \
+  --max-model-calls 20
 ```
 
 Review [the prompts](src/nano_mle/prompts.py), task, and budgets before starting a
@@ -51,10 +52,16 @@ live run. For example, the DSPy/LiteLLM model identifier for Gemini is supplied
 as `--model gemini/gemini-3.8-flash`. The prototype does not automatically test
 credentials or start a live model.
 
+Each backend call has a 6,000 output-token limit and a 60-second request timeout.
+Provider retries and DSPy's adapter fallback calls are disabled. The workspace's
+model-call limit counts calls before dispatch, including failures. This bounds
+call volume, not total dollar cost; input size and provider pricing still matter.
+
 The workspace contains `state.db` (authoritative journal), `workspace.json`
 (exported evaluation contract), `graph.json`, `report.md`, and `artifacts/`.
 Artifacts preserve model inputs/outputs, generated source, repair attempts,
-execution logs, DataOps graph JSON, step descriptions and exploration results.
+execution logs, DataOps graph JSON (operations, arguments and dependencies), step
+descriptions and exploration results.
 Completed workspaces are immutable runs; use a new workspace for new budgets or
 evaluation rules. Interrupted runs can resume; interrupted work remains recorded
 and is not silently replayed.

@@ -32,3 +32,9 @@ def build(ctx):
 def test_unnamed_choices_rejected():
     with pytest.raises(ValueError, match="name"):
         validate_source("import skrub\ndef build(ctx):\n    return skrub.choose_from([1,2])\n")
+
+
+def test_transformer_alias_cannot_hide_function_nodes():
+    with pytest.raises(ValueError, match="function transformers"):
+        validate_source("from sklearn.preprocessing import FunctionTransformer as F\n"
+                        "def build(ctx):\n    X, y = ctx.load_xy()\n    return X.skb.apply(F())\n")

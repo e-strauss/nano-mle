@@ -12,6 +12,10 @@ from .search import policy, update_stats, valid
 from .store import Store, new_id
 
 
+class ModelCallBudgetExceeded(RuntimeError):
+    pass
+
+
 def initialize(workspace: Path, task: Task, budget: Budget, search_policy="greedy"):
     manifest = source_manifest(task)
     workspace.mkdir(parents=True, exist_ok=False)
@@ -72,7 +76,8 @@ class Runner:
         return {"explorations": len(self.store.records("exploration")),
                 "expansions": len(self.store.records("expansion")),
                 "evaluations": sum(a.get("evaluation_count", 0) for a in self.store.records("attempt")),
-                "actions": self.store.meta("actions", 0)}
+                "actions": self.store.meta("actions", 0),
+                "model_calls": len(self.store.records("model_call"))}
 
     def context(self, selection=None, requested=0):
         candidates = self.store.records("candidate")
@@ -104,7 +109,7 @@ class Runner:
                     if cursor["parent_id"] == "root":
                         break
                     cursor = self.store.get(cursor["parent_id"])
-                context["trajectory"] = list(reversed(trajectory[-6:]))
+                context["trajectory"] = list(reversed(trajectory[:6]))
         return context
 
     def _candidate_context(self, candidate):
@@ -114,16 +119,20 @@ class Runner:
         return {**candidate, "resolved_source": resolve_source(path.read_text(), candidate["configuration"])}
 
     def call(self, method, **kwargs):
+        if self.counts()["model_calls"] >= self.budget.max_model_calls:
+            raise ModelCallBudgetExceeded("Model-call budget exhausted")
         call_id = new_id("call")
         directory = self.workspace / "artifacts" / "calls"
         directory.mkdir(exist_ok=True)
         request = {"method": method, "inputs": kwargs}
         (directory / f"{call_id}.input.json").write_text(json.dumps(request, indent=2))
+        self.store.put("model_call", {"id": call_id, "method": method, "status": "started"})
         self.store.event("model_call_started", id=call_id, method=method)
         result = getattr(self.backend, method)(**kwargs)
         encoded = (result.model_dump() if hasattr(result, "model_dump") else
                    [f.model_dump() for f in result] if isinstance(result, list) else result)
         (directory / f"{call_id}.output.json").write_text(json.dumps(encoded, indent=2))
+        self.store.put("model_call", {"id": call_id, "method": method, "status": "finished"})
         self.store.event("model_call_finished", id=call_id, method=method)
         return result
 
@@ -267,14 +276,27 @@ class Runner:
                 if record["status"] == "running":
                     record.update(status="interrupted", error="Previous runner interrupted; artifacts retained")
                     self.store.put(kind, record)
+        for call in self.store.records("model_call"):
+            if call["status"] == "started":
+                call["status"] = "interrupted"
+                self.store.put("model_call", call)
+
+    def fail_active(self, error):
+        for kind in ("expansion", "exploration"):
+            for record in self.store.records(kind):
+                if record["status"] == "running":
+                    record.update(status="failed", error=error)
+                    self.store.put(kind, record)
 
     def run(self):
+        owns_lock = False
         try:
             with (self.workspace / ".run.lock").open("a") as lock:
                 try:
                     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
                     raise ValueError("Another runner owns this workspace") from None
+                owns_lock = True
                 if self.store.meta("state") == "complete":
                     return
                 self.recover()
@@ -298,13 +320,20 @@ class Runner:
                         else:
                             self.expand()
                     except ValueError as error:
+                        self.fail_active(str(error))
                         self.store.event("action_rejected", error=str(error))
                         self.notify(f"Action rejected: {error}")
                 self.store.set_meta("state", "complete")
                 export_workspace(self.store)
-        except BaseException:
-            self.store.set_meta("state", "interrupted")
+        except ModelCallBudgetExceeded as error:
+            self.fail_active(str(error))
+            self.store.event("stopped", reason=str(error))
+            self.store.set_meta("state", "complete")
             export_workspace(self.store)
+        except BaseException:
+            if owns_lock:
+                self.store.set_meta("state", "interrupted")
+                export_workspace(self.store)
             raise
         finally:
             self.store.close()

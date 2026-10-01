@@ -66,6 +66,8 @@ def validate_source(source: str):
         if isinstance(node, ast.ImportFrom):
             if node.level or node.module not in ALLOWED_IMPORTS or any(a.name == "*" for a in node.names):
                 raise ValueError("Unsupported import")
+            if any(a.name == "FunctionTransformer" for a in node.names):
+                raise ValueError("Custom function transformers are not supported")
         if isinstance(node, (ast.ClassDef, ast.Lambda, ast.AsyncFunctionDef, ast.For, ast.While,
                              ast.With, ast.Try, ast.ListComp, ast.DictComp, ast.SetComp, ast.GeneratorExp)):
             raise ValueError("Opaque functions, classes, comprehensions, and control loops are not supported")
@@ -129,8 +131,11 @@ class PlanContext:
         self.marked = None
 
     def read(self, name):
-        if self.contract and name == self.task.train_source:
-            raise ValueError("Pipeline training data must come through load_xy()")
+        if self.contract:
+            training = self.manifest[self.task.train_source]
+            source = self.manifest[name]
+            if source["path"] == training["path"] or source["sha256"] == training["sha256"]:
+                raise ValueError("Pipeline training data must come through load_xy(), including source aliases")
         return self._read(name)
 
     def _read(self, name):

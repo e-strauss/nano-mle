@@ -30,6 +30,7 @@ class DSPyBackend:
             kwargs["api_key"] = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
         self.lm = dspy.LM(model, **kwargs)
         self.dspy = dspy
+        self.adapter = dspy.ChatAdapter(use_json_adapter_fallback=False)
 
         class Control(dspy.Signature):
             context: str = dspy.InputField()
@@ -60,18 +61,15 @@ class DSPyBackend:
             result: str = dspy.InputField()
             findings: list[Finding] = dspy.OutputField()
 
-        Control.__doc__ = CONTROL_INSTRUCTIONS
-        Plan.__doc__ = PLANNING_INSTRUCTIONS
-        Write.__doc__ = PLAN_INSTRUCTIONS
-        Repair.__doc__ = PLAN_INSTRUCTIONS + "\nRepair the error while preserving the planned experiment."
-        self.controller = dspy.Predict(Control)
-        self.planner = dspy.Predict(Plan)
-        self.writer = dspy.Predict(Write)
-        self.repairer = dspy.Predict(Repair)
+        self.controller = dspy.Predict(Control.with_instructions(CONTROL_INSTRUCTIONS))
+        self.planner = dspy.Predict(Plan.with_instructions(PLANNING_INSTRUCTIONS))
+        self.writer = dspy.Predict(Write.with_instructions(PLAN_INSTRUCTIONS))
+        self.repairer = dspy.Predict(Repair.with_instructions(
+            PLAN_INSTRUCTIONS + "\nRepair the error while preserving the planned experiment."))
         self.interpreter = dspy.Predict(Interpret)
 
     def _call(self, module, **kwargs):
-        with self.dspy.context(lm=self.lm):
+        with self.dspy.context(lm=self.lm, adapter=self.adapter):
             return module(**{k: json.dumps(v) if isinstance(v, (dict, list)) else v for k, v in kwargs.items()})
 
     def control(self, context):

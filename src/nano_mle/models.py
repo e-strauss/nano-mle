@@ -87,3 +87,4 @@ class Budget(Model):
     max_evaluations: int = Field(default=24, ge=1)
     max_repairs: int = Field(default=2, ge=0)
     execution_timeout: int = Field(default=120, ge=1)
+    max_model_calls: int = Field(default=80, ge=1)

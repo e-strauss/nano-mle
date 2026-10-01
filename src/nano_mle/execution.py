@@ -26,9 +26,24 @@ def run_plan(directory: Path, source: str, request: dict, timeout: int):
             usage = directory / "usage.json"
             result = {"status": "failed", "error": f"Execution timed out after {timeout}s",
                       "evaluation_count": json.loads(usage.read_text())["evaluation_count"] if usage.exists() else 0}
+            if usage.exists():
+                result["variants"] = [{**v, "error": result["error"]}
+                                      for v in json.loads(usage.read_text())["variants"]]
             (directory / "response.json").write_text(json.dumps(result))
             return result
+        except BaseException:
+            if child.poll() is None:
+                os.killpg(child.pid, signal.SIGKILL)
+            child.wait()
+            raise
     response = directory / "response.json"
     if not response.exists():
-        return {"status": "failed", "error": f"Worker exited {child.returncode} without a response"}
+        usage = directory / "usage.json"
+        reserved = json.loads(usage.read_text()) if usage.exists() else {"evaluation_count": 0}
+        result = {"status": "failed", "error": f"Worker exited {child.returncode} without a response",
+                  "evaluation_count": reserved["evaluation_count"]}
+        if "variants" in reserved:
+            result["variants"] = [{**v, "error": result["error"]} for v in reserved["variants"]]
+        response.write_text(json.dumps(result))
+        return result
     return json.loads(response.read_text())

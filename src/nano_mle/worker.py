@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import skrub
+from sklearn.base import BaseEstimator
 from sklearn.model_selection import ParameterGrid
 
 from .contracts import verify_contract, verify_sources
@@ -22,13 +23,39 @@ def graph_artifact(plan, path):
     from skrub._data_ops._evaluation import graph
 
     structure = graph(plan)
+    node_ids = {id(value): key for key, value in structure["nodes"].items()}
+
+    def encode(value):
+        if isinstance(value, skrub.DataOp):
+            return {"node": node_ids.get(id(value)), "type": type(value._skrub_impl).__name__}
+        if value is None or isinstance(value, (str, bool, int)):
+            return value
+        if isinstance(value, (float, np.floating)):
+            return float(value) if math.isfinite(value) else repr(value)
+        if isinstance(value, np.integer):
+            return int(value)
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        if isinstance(value, dict):
+            return {str(k): encode(v) for k, v in value.items()}
+        if isinstance(value, (tuple, list)):
+            return [encode(v) for v in value]
+        if isinstance(value, BaseEstimator):
+            return {"estimator": f"{type(value).__module__}.{type(value).__qualname__}",
+                    "parameters": encode(value.get_params(deep=False))}
+        if callable(value):
+            return {"callable": f"{getattr(value, '__module__', '')}.{getattr(value, '__qualname__', repr(value))}"}
+        return {"type": type(value).__name__, "repr": repr(value)}
+
     for node in structure["nodes"].values():
         impl = node._skrub_impl
         if type(impl).__name__ == "Call" and impl.func is not pd.read_csv:
             raise ValueError("Opaque function node found: only harness CSV reads are allowed")
     serial = {"skrub_version": skrub.__version__, "edge_direction": "operation -> dependencies",
               "nodes": [{"id": key, "type": type(value._skrub_impl).__name__,
-                         "operation": value.skb.describe_steps().splitlines()[-1]}
+                         "operation": value.skb.describe_steps().splitlines()[-1],
+                         "attributes": {field: encode(getattr(value._skrub_impl, field))
+                                        for field in value._skrub_impl._fields}}
                         for key, value in structure["nodes"].items()],
               "dependencies": structure["children"]}
     path.with_suffix(".graph.json").write_text(json.dumps(serial, indent=2))
@@ -89,7 +116,14 @@ def execute(request, directory):
         raise ValueError(f"Grid has {len(grid)} variants, exceeding remaining evaluation budget")
     # Require named choices so configurations can be resolved across rebuilt graphs.
     learner.get_named_params()
-    (directory / "usage.json").write_text(json.dumps({"evaluation_count": len(grid)}))
+    pending = []
+    for index, params in enumerate(grid):
+        resolved = result.skb.make_learner().set_params(**params)
+        pending.append({"index": index, "status": "failed", "score": None,
+                        "configuration": resolved.get_named_params(),
+                        "configuration_description": resolved.describe_params()})
+    # Reserve before scoring: a crash/timeout is charged conservatively for the grid.
+    (directory / "usage.json").write_text(json.dumps({"evaluation_count": len(grid), "variants": pending}))
     search = result.skb.make_grid_search(fitted=True, refit=False, n_jobs=1,
                                        scoring=contract["spec"]["scoring"], error_score=np.nan)
     raw = search.cv_results_
@@ -119,7 +153,10 @@ def main():
         response = {"status": "failed", "error": f"{type(error).__name__}: {error}",
                     "traceback": traceback.format_exc()[-12000:]}
     usage = directory / "usage.json"
-    response["evaluation_count"] = json.loads(usage.read_text())["evaluation_count"] if usage.exists() else 0
+    reserved = json.loads(usage.read_text()) if usage.exists() else {"evaluation_count": 0}
+    response["evaluation_count"] = reserved["evaluation_count"]
+    if response["status"] == "failed" and "variants" in reserved:
+        response["variants"] = [{**v, "error": response["error"]} for v in reserved["variants"]]
     (directory / "response.json").write_text(json.dumps(response, indent=2, allow_nan=False))
 
 
