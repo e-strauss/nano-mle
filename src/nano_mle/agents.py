@@ -6,6 +6,17 @@ from typing import Protocol
 from .models import Decision, Finding, Proposal
 
 
+def lm_settings(model: str, max_tokens: int) -> dict:
+    settings = {"max_tokens": max_tokens, "temperature": 0.2, "num_retries": 0,
+                "timeout": 60, "cache": False}
+    if model.removeprefix("openai/").startswith("gpt-6"):
+        # DSPy's current reasoning-family detection only covers GPT-5/o-series.
+        # Set the Chat Completions reasoning token cap explicitly for GPT-6.
+        settings.update(temperature=None, max_tokens=None, max_completion_tokens=max_tokens,
+                        reasoning_effort="low")
+    return settings
+
+
 class Backend(Protocol):
     def control(self, context: dict) -> Decision: ...
     def plan(self, context: dict) -> Proposal: ...
@@ -24,8 +35,7 @@ class DSPyBackend:
 
         load_dotenv()
         dspy.configure_cache(enable_disk_cache=False, enable_memory_cache=False)
-        kwargs = {"max_tokens": max_tokens, "temperature": 0.2, "num_retries": 0,
-                  "timeout": 60, "cache": False}
+        kwargs = lm_settings(model, max_tokens)
         if model.startswith("gemini/"):
             kwargs["api_key"] = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
         self.lm = dspy.LM(model, **kwargs)

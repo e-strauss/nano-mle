@@ -52,10 +52,19 @@ live run. For example, the DSPy/LiteLLM model identifier for Gemini is supplied
 as `--model gemini/gemini-3.8-flash`. The prototype does not automatically test
 credentials or start a live model.
 
-Each backend call has a 6,000 output-token limit and a 60-second request timeout.
+Each backend call has a 6,000 completion-token limit and a 60-second request timeout.
 Provider retries and DSPy's adapter fallback calls are disabled. The workspace's
 model-call limit counts calls before dispatch, including failures. This bounds
 call volume, not total dollar cost; input size and provider pricing still matter.
+For OpenAI GPT-6 models, the backend uses low reasoning effort, omits a custom
+temperature, and includes reasoning tokens in the completion cap. See the
+[GPT-6.1 Sol documentation](https://developers.openai.com/api/docs/models/gpt-6.1-sol).
+
+A live `openai/gpt-6.1-sol` smoke test on 120 synthetic regression rows completed
+with 10 model calls, one exploration, two expansions, four scored candidates and
+no repairs. Three-fold CV RMSE improved from 0.21441 to 0.20773. This verifies the
+live execution path; it is not a benchmark of model quality. Local artifacts are
+under `workspaces/gpt61-sol-smoke-20261002/` and are excluded from Git.
 
 The workspace contains `state.db` (authoritative journal), `workspace.json`
 (exported evaluation contract), `graph.json`, `report.md`, and `artifacts/`.
