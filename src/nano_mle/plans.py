@@ -49,6 +49,8 @@ Skrub API notes (exact signatures; do not guess other keywords):
   these keyword arguments; there is no categorical= argument. Defaults: low_cardinality
   one-hot, high_cardinality StringEncoder, numeric passthrough.
 - Casts use dtypes: .astype("string"), .astype("float64") or .astype(str) are fine.
+- .skb.apply keeps DataFrame output, so sklearn encoders must produce dense output:
+  OneHotEncoder(sparse_output=False, handle_unknown="ignore").
 - Chain preprocessing as successive .skb.apply(...) steps; sklearn.pipeline is not
   importable. Allowed imports: skrub, pandas, numpy and sklearn submodules
   model_selection, ensemble, linear_model, preprocessing, impute, dummy, tree,

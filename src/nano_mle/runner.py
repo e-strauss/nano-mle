@@ -184,7 +184,8 @@ class Runner:
             if (repair_number == self.budget.max_repairs or
                     (kind == "pipeline" and self.counts()["evaluations"] >= self.budget.max_evaluations)):
                 break
-            self.notify(f"  Repair {repair_number + 1}: {result['error'].splitlines()[0][:180]}")
+            summary = " ".join(result["error"].split())  # some messages start with a line break
+            self.notify(f"  Repair {repair_number + 1}: {summary[:180]}")
             source = self.call("repair", kind=kind, context=context, intent=intent, source=source,
                                error=result.get("traceback", result["error"]))
         return result, attempt
