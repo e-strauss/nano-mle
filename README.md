@@ -77,6 +77,7 @@ A single controller loop chooses one action at a time:
 | `explore` | The writer produces a graph answering a concrete question; outputs are evaluated and an interpreter turns them into scoped findings. | No |
 | `establish_evaluation` | The writer constructs the modelling population, raw labels, CV and scorer. The harness audits and locks them. | No |
 | `expand` | The search policy selects a parent; the planner proposes a bounded change (or requests an exploration first); the writer implements it; every grid variant is scored. | Yes |
+| `probe` | Fits one configuration (an existing candidate, or a pipeline the writer builds) on the locked folds and saves its out-of-fold predictions. Later explorations read them for error analysis. | No |
 | `stop` | Ends the run. | |
 
 Every implementation runs in a time-bounded subprocess. If it fails, the repairer
@@ -84,8 +85,8 @@ gets the source and traceback and may fix it, up to `--max-repairs` times. A
 repair must keep the planned experiment; a different hypothesis needs a new proposal.
 
 Budgets cover controller actions, model calls (counted before dispatch, including
-failures), explorations, setup attempts, expansions, scored variants, repairs and
-execution time. They bound call volume, not dollar cost.
+failures), explorations, setup attempts, expansions, scored variants, probes, repairs
+and execution time. They bound call volume, not dollar cost.
 
 ## Plans
 
@@ -140,6 +141,14 @@ function `scorer(estimator, X, y) -> float` defined in the setup (higher is bett
 It runs on each test fold with that fold's marked X, so ids and group keys kept in X
 can drive grouped metrics such as per-entity recall@k. A custom scorer is locked like
 a custom splitter: by its source plus the plan helpers and upper-case constants it uses.
+
+**Probes.** A probe is written like a pipeline with a single configuration. The
+harness wraps the locked scorer to capture each test fold's predictions during the
+normal fold loop, so nothing is fitted twice, and writes `oof_predictions.parquet`
+with `row` (position in the locked X), `fold`, `y`, `prediction` (positive-class
+probability where available) and `row_key`. Explorations receive the paths in
+`probe_outputs` and read them like any other source, so error analysis stays a
+fine-grained DataOps graph.
 
 **Plan rules.** These are enforced by a source lint (`plans.py`) and a runtime graph
 check (`graphs.py`):

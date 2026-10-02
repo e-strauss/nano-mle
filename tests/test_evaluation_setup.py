@@ -147,3 +147,43 @@ def build():
                         {'kind': 'pipeline', 'contract': contract, 'remaining_evaluations': 1}, 60)
     assert rejected['status'] == 'failed' and rejected.get('warning') == 'contract_drift'
     assert 'scoring' in rejected['changed_components']
+
+
+def test_probe_returns_out_of_fold_probabilities_with_row_keys(tmp_path):
+    data = tmp_path / 'pairs.csv'
+    rows = [{'g': g, 't': t, 'a': (g * 7 + t * 3) % 5, 'target': int((g + t) % 3 == 0)}
+            for g in range(24) for t in range(5)]
+    pd.DataFrame(rows).to_csv(data, index=False)
+    source = f'''import pandas as pd
+import skrub
+from sklearn.model_selection import GroupKFold
+
+def build():
+    data = skrub.as_data_op({str(data)!r}).skb.apply_func(pd.read_csv)
+    X = data[['g', 't', 'a']].skb.mark_as_X(cv=GroupKFold(3), split_kwargs={{'groups': data['g']}})
+    y = data['target'].skb.mark_as_y()
+    keys = data['g'].astype(str) + ':' + data['t'].astype(str)
+    return {{'X': X, 'y': y, 'scoring': 'roc_auc', 'row_keys': keys}}
+'''
+    setup = run_plan(tmp_path / 'setup', source, {'kind': 'evaluation'}, 60)
+    assert setup['status'] == 'ok', setup
+    contract = create_contract(setup['snapshot'], evaluation_source(source),
+                               EvaluationSpec(scoring='roc_auc', rationale='grouped'))
+    body = '''
+from sklearn.linear_model import LogisticRegression
+def build():
+    setup = build_evaluation()
+    pred = setup['X'][['t', 'a']].skb.apply(LogisticRegression(C={c}), y=setup['y'])
+    return {{'pred': pred, 'scoring': setup['scoring'], 'row_keys': setup['row_keys']}}
+'''
+    probed = run_plan(tmp_path / 'probe', contract['setup_source'] + body.format(c='1.0'),
+                      {'kind': 'probe', 'contract': contract}, 60)
+    assert probed['status'] == 'ok', probed
+    oof = pd.read_parquet(probed['probe']['path'])
+    assert list(oof.columns) == ['row', 'row_key', 'fold', 'y', 'prediction']
+    assert sorted(oof['row']) == list(range(120)) and oof['prediction'].between(0, 1).all()
+    assert oof.loc[oof['row'] == 7, 'row_key'].item() == '1:2'
+    assert probed['evaluation_count'] == 0
+    grid = run_plan(tmp_path / 'grid', contract['setup_source'] + body.format(c="skrub.choose_from([0.1, 1.0], name='C')"),
+                    {'kind': 'probe', 'contract': contract}, 60)
+    assert grid['status'] == 'failed' and 'single value' in grid['error']

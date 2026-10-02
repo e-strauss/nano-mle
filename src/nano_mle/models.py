@@ -36,11 +36,14 @@ class EvaluationSpec(Model):
 
 
 class Decision(Model):
-    action: Literal["explore", "establish_evaluation", "expand", "stop"]
+    action: Literal["explore", "establish_evaluation", "expand", "probe", "stop"]
     reason: str
     question: str | None = None
     stopping_condition: str | None = None
     evaluation: EvaluationSpec | None = None
+    # probe: out-of-fold predictions of an existing candidate (candidate_id) or of a
+    # pipeline the writer builds for the question; read later by explorations.
+    candidate_id: str | None = None
 
     @model_validator(mode="after")
     def check_payload(self):
@@ -48,6 +51,8 @@ class Decision(Model):
             raise ValueError("explore needs a question and stopping_condition")
         if self.action == "establish_evaluation" and self.evaluation is None:
             raise ValueError("establish_evaluation needs evaluation")
+        if self.action == "probe" and not self.question:
+            raise ValueError("probe needs a question it serves")
         return self
 
 
@@ -80,6 +85,7 @@ class Budget(Model):
     max_evaluation_setups: int = Field(default=3, ge=1)
     max_requested_explorations: int = Field(default=2, ge=0)
     max_evaluations: int = Field(default=24, ge=1)
+    max_probes: int = Field(default=4, ge=0)
     max_repairs: int = Field(default=2, ge=0)
     execution_timeout: int = Field(default=120, ge=1)
     max_model_calls: int = Field(default=80, ge=1)

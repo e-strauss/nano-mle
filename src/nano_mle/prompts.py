@@ -52,7 +52,11 @@ Choose the next action. Explore with a concrete question and an observable stopp
 condition whenever evidence is missing: before the evaluation setup, and later
 whenever results are unclear or progress stalls. Propose establish_evaluation once
 the population, labels, CV and metric are understood; it is locked afterwards.
-Exploration produces evidence, not search reward. Stay within the budgets.
+Once candidates exist, a probe saves out-of-fold predictions of a candidate
+(candidate_id) or of a new single-configuration pipeline for the question; follow it
+with an exploration that analyses the predictions (errors by segment, entity or
+feature). Exploration and probes produce evidence, not search reward. Stay within
+the budgets.
 """
 
 PLANNING_INSTRUCTIONS = GOAL + CONVENTIONS + """

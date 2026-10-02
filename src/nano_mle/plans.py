@@ -33,6 +33,14 @@ Plan contract (checked by the harness):
   setup scoring, 'row_keys': the same DataOp if declared}. The harness compares the
   X/y/CV/scoring/row-key graphs and the folds with the lock before fitting; drift is
   rejected. Keep the row count and order of X.
+- A probe is written like a pipeline with a single configuration (no choose_from).
+  The harness fits it on the locked folds and saves out-of-fold predictions with
+  columns row (position in the locked X), fold, y, prediction and row_key (if
+  declared). Probes are evidence, not candidates.
+- Explorations may read probe outputs (context.probe_outputs[].path, parquet) as
+  sources, e.g. to join predictions with the locked X or other tables for error
+  analysis. Rebuild X with build_evaluation() from locked_evaluation_source and use
+  its row positions to join.
 - Named skrub.choose_from grids become one candidate per variant (within the
   evaluation budget). Children receive the parent's resolved configuration.
 - Return code without markdown fences. No credentials, no manual fitting or scoring,

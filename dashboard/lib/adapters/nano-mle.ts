@@ -138,6 +138,7 @@ function counts(ws: Workspace) {
     explorations: ws.of("exploration").length,
     evaluation_setups: ws.of("evaluation_setup").length,
     expansions: ws.of("expansion").length,
+    probes: ws.of("probe").length,
     evaluations: attempts.reduce((n, a) => n + (a.evaluation_count ?? 0), 0),
     repairs: attempts.filter((a) => (a.repair_number ?? 0) > 0).length,
   };
@@ -153,6 +154,7 @@ function summarize(ws: Workspace, id: string): RunSummary {
     { name: "setups", used: c.evaluation_setups, limit: budget.max_evaluation_setups ?? null },
     { name: "expansions", used: c.expansions, limit: budget.max_expansions ?? null },
     { name: "evaluations", used: c.evaluations, limit: budget.max_evaluations ?? null },
+    { name: "probes", used: c.probes, limit: budget.max_probes ?? null },
     { name: "repairs", used: c.repairs, limit: null },
   ];
   const valid = ws.of("candidate").filter((x) => x.status === "ok" && typeof x.score === "number");
@@ -245,6 +247,17 @@ function graph(ws: Workspace): { nodes: GraphNode[]; edges: GraphEdge[] } {
       const targets = byBatch.get(expansion.id)?.map((c) => c.id) ?? [expansion.id];
       for (const t of targets) edges.push({ from: x.id, to: t, kind: "evidence" });
     }
+  }
+  for (const pr of ws.of("probe")) {
+    // Out-of-fold predictions of a candidate (or of a new pipeline): evidence, no score node.
+    const anchor = pr.candidate_id && ws.byId.has(pr.candidate_id) ? pr.candidate_id : "root";
+    const info = pr.result?.probe;
+    nodes.push({
+      id: pr.id, kind: "probe", shape: "diamond", label: "probe " + short(pr.id.replace(/^probe_/, "")),
+      subtitle: info ? `oof ${info.score?.toFixed?.(4) ?? ""} · ${(pr.question ?? "").slice(0, 40)}` : (pr.question ?? "").slice(0, 60),
+      status: status(pr.status), parent: anchor, order: pr._seq,
+    });
+    edges.push({ from: anchor, to: pr.id, kind: "requested" });
   }
   return { nodes, edges };
 }
@@ -383,6 +396,19 @@ function nodeSections(ws: Workspace, nodeId: string): Section[] {
         title: `${k}${v.shape ? ` ${JSON.stringify(v.shape)}` : ""}`, kind: "code", content: String(v.preview ?? ""),
       })) });
     }
+    out.push({ title: "attempts", kind: "group", content: attemptSections(ws, rec.attempt_ids ?? []) });
+    return out;
+  }
+  if (nodeId.startsWith("probe_")) {
+    const info = rec.result?.probe;
+    const out: Section[] = [{ title: "probe", kind: "kv", content: [
+      ["status", fmt(rec.status)], ["question", fmt(rec.question)],
+      ["source", rec.candidate_id ? `candidate ${rec.candidate_id} (resolved source)` : "new pipeline (writer)"],
+      ["out-of-fold score", fmt(info?.score)], ["fold scores", (info?.fold_scores ?? []).map(fmt).join(" / ") || "—"],
+      ["rows", fmt(info?.rows)], ["columns", (info?.columns ?? []).join(", ") || "—"],
+    ] }];
+    if (info?.preview) out.push({ title: "predictions (first rows)", kind: "code", content: info.preview });
+    out.push(...graphSection(ws, rec.attempt_ids ?? []));
     out.push({ title: "attempts", kind: "group", content: attemptSections(ws, rec.attempt_ids ?? []) });
     return out;
   }

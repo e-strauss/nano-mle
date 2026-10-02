@@ -92,6 +92,62 @@ def evaluate_outputs(plans, directory, phases, prefix=""):
         return {name: output_artifact(f"{prefix}{name}", values[name], directory) for name in plans}
 
 
+def prediction_of(estimator, X):
+    """Positive-class probability, else decision function, else plain prediction."""
+    if hasattr(estimator, "predict_proba"):
+        proba = np.asarray(estimator.predict_proba(X))
+        return proba[:, 1] if proba.ndim == 2 and proba.shape[1] == 2 else proba.tolist()
+    if hasattr(estimator, "decision_function"):
+        return np.asarray(estimator.decision_function(X))
+    return np.asarray(estimator.predict(X))
+
+
+def probe(result, contract, directory, phases, started):
+    """Fit one configuration on the locked folds and save its out-of-fold predictions.
+
+    Evidence only: no candidate and no search reward. Predictions are captured by
+    wrapping the locked scorer, so each fold is fitted and predicted exactly once.
+    """
+    from sklearn.metrics import get_scorer
+
+    pred = result["pred"]
+    with phases("graph_artifact", output="probe"):
+        graph_artifact(pred, directory / "probe")
+    with phases("learner_and_grid"):
+        if len(ParameterGrid(pred.skb.make_learner().get_param_grid())) != 1:
+            raise ValueError("A probe evaluates one configuration; resolve choose_from to a single value")
+    frozen = [(np.asarray(s["train"]), np.asarray(s["test"])) for s in contract["splits"]]
+    base = result["scoring"] if contract["scoring"].startswith("custom:") else get_scorer(contract["scoring"])
+    captured = []
+
+    def capturing(estimator, X, y):
+        fold = len(captured)  # one configuration, n_jobs=1: folds are scored in split order
+        captured.append({"fold": fold, "row": frozen[fold][1], "y": np.asarray(y),
+                         "prediction": prediction_of(estimator, X)})
+        return base(estimator, X, y)
+
+    with phases("grid_search", variants=1, folds=len(frozen)):
+        search = pred.skb.make_grid_search(fitted=True, refit=False, n_jobs=1, cv=frozen,
+                                         scoring=capturing, error_score="raise")
+    if len(captured) != len(frozen):
+        raise ValueError(f"Expected {len(frozen)} scored folds, captured {len(captured)}")
+    with phases("write_predictions"):
+        table = pd.concat([pd.DataFrame({"row": c["row"], "fold": c["fold"], "y": c["y"],
+                                         "prediction": c["prediction"]}) for c in captured])
+        table = table.sort_values("row").reset_index(drop=True)
+        if result.get("row_keys") is not None:
+            with skrub.config_context(eager_data_ops=False):
+                keys = result["row_keys"].skb.eval()
+            table.insert(1, "row_key", np.asarray(keys)[table["row"].to_numpy()])
+        table.to_parquet(directory / "oof_predictions.parquet", index=False)
+    folds = [float(search.cv_results_[f"split{k}_test_score"][0]) for k in range(len(frozen))]
+    verify_contract(contract)
+    return {"status": "ok", "duration_s": time.monotonic() - started,
+            "probe": {"path": str(directory / "oof_predictions.parquet"), "rows": len(table),
+                      "columns": list(table.columns), "fold_scores": folds,
+                      "score": float(np.mean(folds)), "preview": table.head(10).to_string()}}
+
+
 def execute(request, directory, phases):
     contract = request.get("contract")
     if contract:
@@ -133,6 +189,8 @@ def execute(request, directory, phases):
                 "duration_s": time.monotonic() - started}
     if contract is None:
         raise ValueError("Scoring requires an audited, locked evaluation setup")
+    if request["kind"] == "probe":
+        return probe(result, contract, directory, phases, started)
     pred = result["pred"]
     with phases("graph_artifact", output="pipeline"):
         graph_artifact(pred, directory / "pipeline")

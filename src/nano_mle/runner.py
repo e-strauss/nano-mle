@@ -63,6 +63,11 @@ def export_workspace(store):
     if rejected:
         lines += ["", "## Evaluation drift warnings", ""]
         lines.extend(f"- {e['id']}: {e['result']['error']}" for e in rejected)
+    probes = [p for p in store.records("probe") if p.get("status") == "ok"]
+    if probes:
+        lines += ["", "## Probes (out-of-fold predictions, not scored candidates)", ""]
+        lines.extend(f"- {p['id']} ({p.get('candidate_id') or 'new pipeline'}): {p['question']} "
+                     f"score {p['result']['probe']['score']:.5f}" for p in probes)
     lines += ["", "## Findings", ""]
     for finding in store.records("finding"):
         lines.append(f"- {finding['id']}: {finding['statement']} ({finding['scope']})")
@@ -84,6 +89,7 @@ class Runner:
 
     def counts(self):
         return {"evaluation_setups": len(self.store.records("evaluation_setup")), "explorations": len(self.store.records("exploration")),
+                "probes": len(self.store.records("probe")),
                 "expansions": len(self.store.records("expansion")),
                 "evaluations": sum(a.get("evaluation_count", 0) for a in self.store.records("attempt")),
                 "actions": self.store.meta("actions", 0),
@@ -106,6 +112,10 @@ class Runner:
                    "leaderboard": sorted(valid(candidates), key=lambda c: c["score"], reverse=True)[:8],
                    "recent_failures": [c for c in candidates if c["status"] != "ok"][-4:],
                    "recent_explorations": self.store.records("exploration")[-4:],
+                   # Out-of-fold predictions explorations may read as sources (parquet).
+                   "probe_outputs": [{"id": r["id"], "question": r["question"], "candidate_id": r.get("candidate_id"),
+                                      **{k: r["result"]["probe"][k] for k in ("path", "rows", "columns", "fold_scores", "score")}}
+                                     for r in self.store.records("probe") if r.get("status") == "ok"],
                    "requested_explorations": requested, "parent": None}
         if selection:
             context["selection"] = {"parent_id": selection.parent_id, "reference_ids": selection.reference_ids}
@@ -148,8 +158,9 @@ class Runner:
         self.store.event("model_call_finished", id=call_id, method=method)
         return result
 
-    def execute(self, kind, record, context, intent):
-        source = self.call("implement", kind=kind, context=context, intent=intent)
+    def execute(self, kind, record, context, intent, source=None):
+        if source is None:
+            source = self.call("implement", kind=kind, context=context, intent=intent)
         result = {"status": "failed", "error": "No attempt executed"}
         for repair_number in range(self.budget.max_repairs + 1):
             attempt_id = new_id("attempt")
@@ -158,7 +169,7 @@ class Runner:
                        "remaining_evaluations": self.budget.max_evaluations - self.counts()["evaluations"]}
             if kind == "evaluation":
                 request["expected_scoring"] = intent["scoring"]
-            if kind == "pipeline":
+            if kind in ("pipeline", "probe"):
                 request["contract"] = self.store.meta("contract")
             attempt = {"id": attempt_id, "owner_id": record["id"], "status": "running",
                        "path": str(directory.relative_to(self.workspace)), "repair_number": repair_number,
@@ -180,7 +191,8 @@ class Runner:
                 attempt.update(warning=result["warning"], changed_components=result.get("changed_components"))
             self.store.put("attempt", attempt)
             record.setdefault("attempt_ids", []).append(attempt_id)
-            self.store.put({"exploration": "exploration", "evaluation": "evaluation_setup", "pipeline": "expansion"}[kind], record)
+            self.store.put({"exploration": "exploration", "evaluation": "evaluation_setup", "pipeline": "expansion",
+                            "probe": "probe"}[kind], record)
             self.store.event("execution_finished", owner_id=record["id"], attempt_id=attempt_id,
                              status=result["status"], evaluations=attempt["evaluation_count"])
             if result["status"] == "ok":
@@ -218,6 +230,29 @@ class Runner:
                 self.store.put("finding", saved)
         export_workspace(self.store)
         return record["id"]
+
+    def probe(self, decision):
+        contract = self.store.meta("contract")
+        if contract is None:
+            raise ValueError("Establish evaluation before probing")
+        verify_contract(contract)
+        if self.counts()["probes"] >= self.budget.max_probes:
+            raise ValueError("Probe budget exhausted")
+        record = {"id": new_id("probe"), "question": decision.question, "candidate_id": decision.candidate_id,
+                  "status": "running", "attempt_ids": []}
+        source = None
+        if decision.candidate_id:
+            candidate = self.store.get(decision.candidate_id)
+            if candidate.get("status") != "ok":
+                raise ValueError("Probe a successfully scored candidate")
+            source = self._candidate_context(candidate)["resolved_source"]
+        self.store.put("probe", record)
+        self.notify(f"Probe {decision.candidate_id or 'new pipeline'}: {decision.question}")
+        intent = {"question": decision.question, "purpose": "out-of-fold predictions for later analysis"}
+        result, attempt = self.execute("probe", record, self.context(), intent, source=source)
+        record.update(status=result["status"], result=result, artifact_path=attempt["path"])
+        self.store.put("probe", record)
+        export_workspace(self.store)
 
     def establish(self, spec):
         if self.store.meta("contract") is not None:
@@ -313,7 +348,7 @@ class Runner:
                 attempt.update(status="interrupted", evaluation_count=json.loads(usage.read_text())["evaluation_count"]
                                if usage.exists() else 0)
                 self.store.put("attempt", attempt)
-        for kind in ("expansion", "exploration", "evaluation_setup"):
+        for kind in ("expansion", "exploration", "evaluation_setup", "probe"):
             for record in self.store.records(kind):
                 if record["status"] == "running":
                     record.update(status="interrupted", error="Previous runner interrupted; artifacts retained")
@@ -324,7 +359,7 @@ class Runner:
                 self.store.put("model_call", call)
 
     def fail_active(self, error):
-        for kind in ("expansion", "exploration", "evaluation_setup"):
+        for kind in ("expansion", "exploration", "evaluation_setup", "probe"):
             for record in self.store.records(kind):
                 if record["status"] == "running":
                     record.update(status="failed", error=error)
@@ -364,6 +399,8 @@ class Runner:
                             self.explore(decision.question, decision.stopping_condition)
                         elif decision.action == "establish_evaluation":
                             self.establish(decision.evaluation)
+                        elif decision.action == "probe":
+                            self.probe(decision)
                         else:
                             self.expand()
                     except ValueError as error:

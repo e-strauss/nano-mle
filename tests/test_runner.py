@@ -194,3 +194,50 @@ def test_missing_libraries_are_recorded_once_per_module(tmp_path, monkeypatch):
     data = json.loads(record_path().read_text())
     assert data["somelib"]["count"] == 2 and len(data["somelib"]["workspaces"]) == 2
     assert data["otherlib"]["count"] == 1
+
+
+class ProbeBackend(DemoBackend):
+    """Explore, lock, expand once, probe the candidate, then analyse its predictions."""
+
+    def control(self, context):
+        from nano_mle.models import Decision
+
+        counts = context["counts"]
+        if counts["expansions"] >= 1 and counts["probes"] == 0:
+            best = context["leaderboard"][0]["id"]
+            return Decision(action="probe", reason="Inspect errors", candidate_id=best,
+                            question="Where is the baseline wrong?")
+        if counts["probes"] == 1 and counts["explorations"] == 1:
+            return Decision(action="explore", reason="Analyse probe", question="Error distribution by fold?",
+                            stopping_condition="Error summary computed")
+        if counts["probes"] == 1 and counts["explorations"] == 2:
+            return Decision(action="stop", reason="Done")
+        return super().control(context)
+
+    def implement(self, kind, context, intent):
+        if kind == "exploration" and context["probe_outputs"]:
+            path = repr(context["probe_outputs"][0]["path"])
+            return ("import pandas as pd\nimport skrub\n\ndef build():\n"
+                    f"    oof = skrub.as_data_op({path}).skb.apply_func(pd.read_parquet)\n"
+                    "    error = (oof['prediction'] - oof['y']).abs()\n"
+                    "    return {'error_summary': error.describe(), 'rows_per_fold': oof.groupby('fold')['row'].count()}\n")
+        return super().implement(kind, context, intent)
+
+
+def test_probe_saves_out_of_fold_predictions_for_explorations(workspace):
+    Runner(workspace, ProbeBackend()).run()
+    store = Store(workspace)
+    probes = store.records("probe")
+    assert len(probes) == 1 and probes[0]["status"] == "ok", probes
+    info = probes[0]["result"]["probe"]
+    oof = pd.read_parquet(info["path"])
+    assert sorted(oof["row"]) == list(range(18)) and set(oof["fold"]) == {0, 1, 2}
+    assert len(info["fold_scores"]) == 3
+    # The probe re-ran the candidate's resolved source: no implement call for it.
+    calls = [c["method"] for c in store.records("model_call")]
+    assert calls.count("implement") == 4  # exploration, setup, expansion, analysis
+    analysis = store.records("exploration")[-1]
+    assert analysis["status"] == "ok" and "rows_per_fold" in analysis["result"]["outputs"]
+    assert store.meta("budget")["max_probes"] == 4
+    assert all(c["status"] == "ok" for c in store.records("candidate"))
+    assert len(store.records("candidate")) == 1  # probes create no candidates
