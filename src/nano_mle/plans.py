@@ -83,10 +83,25 @@ def validate_source(source):
     if (build.args.args or build.args.posonlyargs or build.args.kwonlyargs or build.args.vararg
             or build.args.kwarg or build.decorator_list):
         raise ValueError("Use undecorated build() without arguments")
-    readers = {"read_csv", "read_parquet"}
+    # Eager reads are calls that resolve to pandas readers: pd.read_*(...) through a
+    # pandas alias, or names imported from pandas. A plan's own helper that happens
+    # to be called read_parquet (and records the read) is not one.
+    reader_names = {"read_csv", "read_parquet"}
+    pandas_aliases = {"pandas"}
+    imported_readers = set()
     for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            pandas_aliases.update(a.asname or a.name for a in node.names if a.name == "pandas")
         if isinstance(node, ast.ImportFrom) and node.module == "pandas":
-            readers.update(a.asname or a.name for a in node.names if a.name in {"read_csv", "read_parquet"})
+            imported_readers.update(a.asname or a.name for a in node.names if a.name in reader_names)
+    local_functions = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    readers = imported_readers | (reader_names - local_functions)
+
+    def is_eager_read(call):
+        if isinstance(call.func, ast.Attribute):
+            return (call.func.attr in reader_names and isinstance(call.func.value, ast.Name)
+                    and call.func.value.id in pandas_aliases)
+        return getattr(call.func, "id", "") in readers
     choice_names = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -115,7 +130,7 @@ def validate_source(source):
             raise ValueError(f"Unsupported name: {node.id}")
         if isinstance(node, ast.Call):
             name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
-            if name in readers:
+            if is_eager_read(node):
                 raise ValueError("Record readers with as_data_op(path).skb.apply_func(reader), never eager reads")
             if name == "choose_from":
                 names = [k.value for k in node.keywords if k.arg == "name"]

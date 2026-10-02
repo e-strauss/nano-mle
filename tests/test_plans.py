@@ -97,3 +97,16 @@ def test_dtype_arguments_are_not_opaque_callables():
         def helper(x):
             return x
         validate_graph(data["a"].clip(upper=helper))
+
+
+def test_local_reader_helpers_are_not_eager_reads():
+    helper = ("import pandas as pd\nimport skrub\n"
+              "def read_parquet(name):\n"
+              "    return skrub.as_data_op(name).skb.apply_func(pd.read_parquet)\n"
+              "def build():\n    return {'t': read_parquet('t.parquet')}\n")
+    validate_source(helper)
+    for eager in ("import pandas as pd\ndef build():\n    return pd.read_parquet('t')\n",
+                  "import pandas\ndef build():\n    return pandas.read_csv('t')\n",
+                  "from pandas import read_csv as rc\ndef build():\n    return rc('t')\n"):
+        with pytest.raises(ValueError, match="Record readers"):
+            validate_source(eager)
