@@ -5,6 +5,7 @@ import json
 import shutil
 from pathlib import Path
 
+from .config import load_config
 from .contracts import create_contract, digest, source_manifest, verify_contract
 from .execution import run_plan
 from .models import Budget, Task
@@ -41,7 +42,7 @@ def export_workspace(store):
     workspace = store.workspace
     candidates = store.records("candidate")
     metadata = {"task": store.meta("task"), "sources": store.meta("sources"),
-                "budget": store.meta("budget"), "policy": store.meta("policy"), "model": store.meta("model"),
+                "budget": store.meta("budget"), "policy": store.meta("policy"), "model": store.meta("model"), "config": store.meta("config"),
                 "state": store.meta("state"), "evaluation": store.meta("contract")}
     (workspace / "workspace.json").write_text(json.dumps(metadata, indent=2))
     graph = {"root": "root", "candidates": candidates,
@@ -390,7 +391,8 @@ class Runner:
                 # A resumed run may use a different model; each session is recorded.
                 model = getattr(self.backend, "model", type(self.backend).__name__)
                 self.store.set_meta("model", model)
-                self.store.event("run_started", model=model)
+                self.store.set_meta("config", load_config())
+                self.store.event("run_started", model=model, config=load_config())
                 self.store.set_meta("state", "running")
                 while self.counts()["actions"] < self.budget.max_actions:
                     if self.counts()["evaluations"] >= self.budget.max_evaluations:

@@ -5,8 +5,10 @@ Source lint is not a security sandbox or a proof of no leakage.
 
 import ast
 
+from .config import load_config
 
-GUIDE = """
+
+_GUIDE = """
 Plan contract (checked by the harness):
 - Standalone Python with imports, constants, graph-building helpers and one
   zero-argument build(). The harness builds the graph lazily and evaluates it.
@@ -14,11 +16,11 @@ Plan contract (checked by the harness):
   with columns/filters/sep as needed. Paths come from the task sources.
 - Compute with fine-grained DataOps: indexing, filters, joins, groupby/agg, assign,
   string/date operations, .skb.concat. Build-time helpers and loops are fine when they
-  emit explicit graph nodes. apply_func is limited to known library primitives
-  (pandas readers, to_datetime, to_numeric, concat; numpy where/select/isfinite/
-  isinf/isnan; len). No deferred, UDFs, callable apply/map/transform, eager reads,
-  materialised data or files. Dictionary and Series maps are allowed. Estimators are
-  applied with .skb.apply(...).
+  emit explicit graph nodes.
+  {apply_func}
+  No deferred, UDFs (functions or lambdas defined in the plan), callable
+  apply/map/transform, eager reads, materialised data or files. Dictionary and
+  Series maps are allowed. Estimators are applied with .skb.apply(...).
 - Prefer fine-grained DataOps whenever the step can be written with them. Write a
   custom estimator or transformer class (sklearn API, defining fit) only when the
   step needs fitted state or is a genuinely new model, e.g. a torch network.
@@ -72,6 +74,13 @@ Skrub and library notes (exact signatures; do not guess other keywords):
   str methods with na=False before combining masks with & or |.
 - Output names are dict keys that must be valid Python identifiers.
 """
+
+APPLY_FUNC = {
+    True: "apply_func is limited to curated library primitives (pandas readers,\n"
+          "  to_datetime, to_numeric, concat, cut; numpy where/select/log1p/clip/...; len).",
+    False: "apply_func may call library functions.",
+}
+GUIDE = _GUIDE.replace("{apply_func}", APPLY_FUNC[load_config()["plans"]["restrict_primitives"]])
 
 # Any installed library may be imported, except modules that reach outside the plan
 # (processes, files, network, interpreter internals). Plans that import a library

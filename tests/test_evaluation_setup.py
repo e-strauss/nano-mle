@@ -87,8 +87,11 @@ def build():
     assert timings['in_progress'] is None
     search = next(p for p in timings['phases'] if p['phase'] == 'grid_search')
     assert search['variants'] == 2 and search['folds'] == 3
-    parts = sum(p['seconds'] for p in timings['phases'] if p.get('part_of') == 'grid_search')
-    assert parts <= search['seconds'] + 1e-6
+    # Fold times are compute time summed over the parallel jobs.
+    seconds = {p['phase']: p['seconds'] for p in timings['phases'] if p.get('part_of') == 'grid_search'}
+    compute = seconds['grid_search.fold_fit'] + seconds['grid_search.fold_score']
+    assert search['n_jobs'] == 2
+    assert compute / search['n_jobs'] + seconds['grid_search.overhead'] <= search['seconds'] + 1e-6
     assert scored['wall_s'] >= timings['elapsed_s']
     assert (tmp_path / 'candidate' / 'timings.json').exists()
 

@@ -8,14 +8,22 @@ import sys
 import time
 from pathlib import Path
 
+from .config import cpu_threads, grid_n_jobs
+
+
+def threads_per_fit(kind):
+    """Pipelines fit grid_n_jobs folds/variants at once and split the threads among them."""
+    return max(1, cpu_threads() // grid_n_jobs()) if kind == "pipeline" else cpu_threads()
+
 
 def run_plan(directory: Path, source: str, request: dict, timeout: int):
     directory.mkdir(parents=True, exist_ok=False)
     (directory / "plan.py").write_text(source)
     (directory / "request.json").write_text(json.dumps(request, indent=2))
     env = os.environ.copy()
-    env.update({"MPLCONFIGDIR": str(directory / "mpl-cache"), "OMP_NUM_THREADS": "1",
-                "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"})
+    threads = str(threads_per_fit(request.get("kind")))
+    env.update({"MPLCONFIGDIR": str(directory / "mpl-cache"), "OMP_NUM_THREADS": threads,
+                "OPENBLAS_NUM_THREADS": threads, "MKL_NUM_THREADS": threads})
     started = time.monotonic()
     with (directory / "execution.log").open("w") as log:
         child = subprocess.Popen([sys.executable, "-m", "nano_mle.worker", str(directory)],

@@ -137,6 +137,7 @@ def test_dtype_arguments_are_not_opaque_callables():
     with pytest.raises(ValueError, match="'helper'.*clip"):
         def helper(x):
             return x
+        helper.__module__ = "generated_plan"  # as if defined in the plan
         validate_graph(data["a"].clip(upper=helper))
 
 
@@ -158,3 +159,34 @@ def test_getattr_only_with_literal_public_name():
     for call in ['getattr(est, name)', 'getattr(est, "__class__")', 'getattr(est, "_private")', 'getattr(est, "fit")']:
         with pytest.raises(ValueError):
             validate_source('def build():\n    return ' + call + '\n')
+
+
+def test_library_functions_allowed_unless_primitives_are_restricted(tmp_path, monkeypatch):
+    import scipy.special
+    from nano_mle import graphs
+
+    with skrub.config_context(eager_data_ops=False):
+        column = skrub.as_data_op(str(tmp_path / 'rows.csv')).skb.apply_func(pd.read_csv)['a']
+        validate_graph(column.skb.apply_func(scipy.special.expit))
+        validate_graph(column.skb.apply_func(np.log1p))
+        planned = lambda x: x
+        with pytest.raises(ValueError, match="not functions defined in the plan"):
+            validate_graph(column.skb.apply_func(planned))
+        monkeypatch.setattr(graphs, "load_config", lambda: {"plans": {"restrict_primitives": True}})
+        validate_graph(column.skb.apply_func(np.log1p))
+        with pytest.raises(ValueError):
+            validate_graph(column.skb.apply_func(scipy.special.expit))
+
+
+def test_config_defaults_and_unknown_keys(tmp_path, monkeypatch):
+    from nano_mle import config
+
+    monkeypatch.setenv("NANO_MLE_CONFIG", str(tmp_path / "missing.toml"))
+    config.load_config.cache_clear()
+    assert config.load_config() == config.DEFAULTS
+    (tmp_path / "bad.toml").write_text("[execution]\nthreads = 4\n")
+    monkeypatch.setenv("NANO_MLE_CONFIG", str(tmp_path / "bad.toml"))
+    config.load_config.cache_clear()
+    with pytest.raises(ValueError, match="Unknown keys"):
+        config.load_config()
+    config.load_config.cache_clear()

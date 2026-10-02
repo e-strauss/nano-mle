@@ -16,6 +16,7 @@ import skrub
 from sklearn.base import BaseEstimator
 from sklearn.model_selection import ParameterGrid
 
+from .config import grid_n_jobs
 from .contracts import ContractDrift, contract_folds, save_folds, verify_contract
 from .evaluation import audit_boundary
 from .graphs import validate_graph
@@ -230,18 +231,20 @@ def execute(request, directory, phases):
     # A custom scorer is the pipeline's own copy of the locked setup function; the
     # boundary audit has already checked it against the contract's fingerprint.
     scorer = result["scoring"] if contract["scoring"].startswith("custom:") else contract["scoring"]
-    with phases("grid_search", variants=len(grid), folds=folds):
-        search = pred.skb.make_grid_search(fitted=True, refit=False, n_jobs=1, cv=frozen,
+    jobs = min(grid_n_jobs(), len(grid) * folds)
+    with phases("grid_search", variants=len(grid), folds=folds, n_jobs=jobs):
+        search = pred.skb.make_grid_search(fitted=True, refit=False, n_jobs=jobs, cv=frozen,
                                          scoring=scorer, error_score=np.nan)
     raw = search.cv_results_
-    # Sequential search: summed fold times are a breakdown of grid_search; the rest
-    # is search overhead, mainly evaluating the graph up to X/y again before splitting.
+    # Summed fold times are compute time across the parallel jobs; divided by the
+    # job count they approximate their share of grid_search wall time. The rest is
+    # search overhead, mainly evaluating the graph up to X/y before splitting.
     fit_total = float(np.sum(raw["mean_fit_time"]) * folds)
     score_total = float(np.sum(raw["mean_score_time"]) * folds)
     grid_s = phases.items[-1]["seconds"]
     phases.add("grid_search.fold_fit", fit_total, part_of="grid_search")
     phases.add("grid_search.fold_score", score_total, part_of="grid_search")
-    phases.add("grid_search.overhead", max(0.0, grid_s - fit_total - score_total), part_of="grid_search")
+    phases.add("grid_search.overhead", max(0.0, grid_s - (fit_total + score_total) / jobs), part_of="grid_search")
     variants = []
     with phases("collect_results"):
         for index, params in enumerate(raw["params"]):

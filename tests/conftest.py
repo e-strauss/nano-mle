@@ -18,3 +18,8 @@ def pytest_runtest_teardown(item):
     item._no_live_backend.stop()
 import tempfile
 os.environ["NANO_MLE_MISSING_LIBRARIES"] = os.path.join(tempfile.mkdtemp(), "missing_libraries.json")
+# Small but parallel: grid searches in tests run two jobs with one thread each.
+_config = os.path.join(tempfile.mkdtemp(), "nano-mle.toml")
+with open(_config, "w") as f:
+    f.write("[execution]\ncpu_threads = 2\ngrid_n_jobs = 2\n")
+os.environ["NANO_MLE_CONFIG"] = _config

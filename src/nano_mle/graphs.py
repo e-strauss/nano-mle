@@ -16,11 +16,31 @@ import pandas as pd
 import skrub
 from sklearn.base import BaseEstimator
 
+from .config import load_config
 from .contracts import canonical_hash
 
 
-PRIMITIVES = {pd.read_csv, pd.read_parquet, pd.to_datetime, pd.to_numeric, pd.concat,
-              np.where, np.select, np.isfinite, np.isinf, np.isnan, len}
+# Curated library primitives for apply_func and callable arguments. Enforced only
+# with [plans] restrict_primitives = true; disabled by default (see config.py).
+PRIMITIVES = {pd.read_csv, pd.read_parquet, pd.read_json, pd.to_datetime, pd.to_numeric,
+              pd.to_timedelta, pd.concat, pd.merge, pd.cut, pd.qcut, pd.get_dummies,
+              pd.isna, pd.notna,
+              np.where, np.select, np.isfinite, np.isinf, np.isnan, np.log, np.log1p, np.exp,
+              np.expm1, np.sqrt, np.abs, np.clip, np.maximum, np.minimum, np.sign, np.floor,
+              np.ceil, np.round, np.power, np.argsort, np.sort, np.unique,
+              len, abs, min, max, round, sum}
+
+
+def is_plan_function(value):
+    """Functions written in the plan, including lambdas: UDFs, always rejected."""
+    return (getattr(value, "__module__", None) == "generated_plan"
+            or getattr(value, "__name__", None) == "<lambda>")
+
+
+def allowed_callable(value):
+    if is_plan_function(value):
+        return False
+    return value in PRIMITIVES or not load_config()["plans"]["restrict_primitives"]
 
 
 def is_dtype(value):
@@ -34,7 +54,7 @@ def validate_graph(plan):
     def check_callbacks(value, method):
         if isinstance(value, skrub.DataOp) or is_dtype(value):
             return
-        if callable(value) and value not in PRIMITIVES:
+        if callable(value) and not allowed_callable(value):
             name = getattr(value, "__name__", None) or type(value).__name__
             raise ValueError(f"Opaque callable argument {name!r} to .{method}(): use explicit recorded operations")
         if isinstance(value, Mapping):
@@ -46,8 +66,9 @@ def validate_graph(plan):
 
     for node in graph(plan)["nodes"].values():
         impl = node._skrub_impl
-        if type(impl).__name__ == "Call" and impl.func not in PRIMITIVES:
-            raise ValueError("Opaque function node: use fine-grained DataOps and supported library primitives")
+        if type(impl).__name__ == "Call" and not allowed_callable(impl.func):
+            raise ValueError("Opaque function node: use fine-grained DataOps and library functions, "
+                             "not functions defined in the plan")
         if type(impl).__name__ == "Value" and isinstance(impl.value, (pd.DataFrame, pd.Series, np.ndarray)):
             raise ValueError("Materialized data leaf: record reads and transformations inside the graph")
         if type(impl).__name__ == "CallMethod":

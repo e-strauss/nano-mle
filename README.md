@@ -68,6 +68,19 @@ A run resumes where it stopped if `run` is invoked again on an interrupted
 workspace; interrupted work stays recorded and is not replayed. A completed
 workspace is immutable; use a new one for new budgets or evaluation rules.
 
+## Configuration
+
+Harness settings live in `nano-mle.toml` at the repository root. It is gitignored;
+`nano-mle.example.toml` is the tracked template and holds the defaults, which apply
+when no local file exists. `NANO_MLE_CONFIG` points to another file. Each run records
+the configuration it used in its workspace metadata.
+
+| Setting | Default | Effect |
+|---|---|---|
+| `[execution] cpu_threads` | 32 | Threads one attempt may use (OpenMP/BLAS for numpy, LightGBM, XGBoost, torch); 0 means all cores. |
+| `[execution] grid_n_jobs` | 2 | Fits run in parallel by the grid search; each gets `cpu_threads // grid_n_jobs` threads. Probes fit sequentially with all threads. |
+| `[plans] restrict_primitives` | false | Limit `apply_func` to the curated primitives in `graphs.PRIMITIVES`. Disabled for now, so plans may call any library function; plan-defined functions and lambdas are rejected either way. |
+
 ## How a run works
 
 A single controller loop chooses one action at a time:
@@ -252,6 +265,7 @@ still shows which phase was running.
 | `contracts.py` | Contract creation, hashing and drift comparison. |
 | `search.py` | Greedy, MCTS and MCGS policies and reward updates. |
 | `store.py` | SQLite journal. |
+| `config.py` | Loads `nano-mle.toml` (threads, grid parallelism, plan checks). |
 | `timing.py` | Phase timer for workers. |
 | `libraries.py` | Repository-level record of imported-but-missing libraries. |
 | `draw.py` | `nano-mle draw ATTEMPT`: rebuilds a recorded plan lazily and prints its Skrub `draw_graph` SVG. |
