@@ -16,9 +16,12 @@ Plan contract (checked by the harness):
   string/date operations, .skb.concat. Build-time helpers and loops are fine when they
   emit explicit graph nodes. apply_func is limited to known library primitives
   (pandas readers, to_datetime, to_numeric, concat; numpy where/select/isfinite/
-  isinf/isnan; len). No deferred, UDFs, custom transformers, callable
-  apply/map/transform, eager reads, materialised data or files. Dictionary and Series
-  maps are allowed. Estimators are applied with .skb.apply(...).
+  isinf/isnan; len). No deferred, UDFs, callable apply/map/transform, eager reads,
+  materialised data or files. Dictionary and Series maps are allowed. Estimators are
+  applied with .skb.apply(...).
+- Prefer fine-grained DataOps whenever the step can be written with them. Write a
+  custom estimator or transformer class (sklearn API, defining fit) only when the
+  step needs fitted state or is a genuinely new model, e.g. a torch network.
 - Exploration returns a dict of named DataOps; all are evaluated in one pass.
 - Evaluation setup returns {'X', 'y', 'scoring', optional 'row_keys', optional
   'audit'}: X marked with mark_as_X(cv=..., split_kwargs=...) and the raw y marked
@@ -61,8 +64,10 @@ Skrub and library notes (exact signatures; do not guess other keywords):
   ML libraries include scikit-learn, lightgbm, xgboost, catboost, torch (CUDA),
   skorch, sentence-transformers, polars, faiss and rank_bm25. Modules for processes,
   files or network access (os, subprocess, pathlib, requests, ...) are not allowed.
-- Custom CV splitters are plain classes with no base class defining
-  split(self, X, y=None, groups=None) and get_n_splits(self, X=None, y=None, groups=None).
+- Custom classes are estimators/transformers (fit), torch modules (forward) or CV
+  splitters (split(self, X, y=None, groups=None) and get_n_splits(self, X=None,
+  y=None, groups=None)). Estimators subclass BaseEstimator and keep __init__ to
+  storing parameters; classifier wrappers list ClassifierMixin before BaseEstimator.
 - Boolean masks over nullable columns must not contain NA: use .fillna(False) or
   str methods with na=False before combining masks with & or |.
 - Output names are dict keys that must be valid Python identifiers.
@@ -92,6 +97,8 @@ def installed(module):
         return False
 
 
+# Inside custom estimator classes, fitting and torch's model.eval() are allowed.
+CLASS_ALLOWED = {"fit", "fit_transform", "eval"}
 FORBIDDEN = {"deferred", "eval", "exec", "preview", "get_data", "set_data", "get_vars",
              "make_grid_search", "make_randomized_search", "make_learner", "with_scoring",
              "cross_validate", "iter_cv_splits", "train_test_split", "subsample",
@@ -151,18 +158,31 @@ def validate_source(source):
                        and 2 <= len(n.args) <= 3 and not n.keywords and isinstance(n.args[1], ast.Constant)
                        and isinstance(n.args[1].value, str) and n.args[1].value.isidentifier()
                        and not n.args[1].value.startswith("_") and n.args[1].value not in FORBIDDEN}
+    in_class = {id(n) for c in ast.walk(tree) if isinstance(c, ast.ClassDef)
+                for m in c.body for n in ast.walk(m)}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             if any(a.name == "FunctionTransformer" for a in node.names):
                 raise ValueError("Custom function transformers are not supported")
         if isinstance(node, ast.ClassDef):
             methods = {m.name for m in node.body if isinstance(m, ast.FunctionDef)}
-            if "split" not in methods or "get_n_splits" not in methods or node.bases or node.decorator_list:
-                raise ValueError(f"Class {node.name}: custom classes are limited to plain CV splitters defining "
-                                 "split and get_n_splits, without base classes (e.g. not BaseCrossValidator) "
-                                 "or decorators")
+            if not ("fit" in methods or "forward" in methods or {"split", "get_n_splits"} <= methods):
+                raise ValueError(f"Class {node.name}: custom classes are estimators/transformers (fit), "
+                                 "torch modules (forward) or CV splitters (split, get_n_splits); "
+                                 "write other logic as fine-grained DataOps")
+            if node.keywords or node.decorator_list or not all(
+                    isinstance(b, (ast.Name, ast.Attribute)) for b in node.bases):
+                raise ValueError(f"Class {node.name}: custom classes take plain base classes "
+                                 "(e.g. BaseEstimator, TransformerMixin, nn.Module), no metaclass or decorators")
         if isinstance(node, ast.Attribute):
-            if node.attr.startswith("_") or node.attr in FORBIDDEN:
+            if id(node) in in_class:
+                # Estimator internals: fitting, private state and torch's model.eval().
+                allowed = (node.attr in CLASS_ALLOWED or (node.attr.startswith("_") and not node.attr.startswith("__"))
+                           or (node.attr == "__init__" and isinstance(node.value, ast.Call)
+                               and getattr(node.value.func, "id", "") == "super"))
+                if not allowed and (node.attr.startswith("_") or node.attr in FORBIDDEN):
+                    raise ValueError(f"Unsupported operation in class: {node.attr}")
+            elif node.attr.startswith("_") or node.attr in FORBIDDEN:
                 raise ValueError(f"Unsupported opaque or harness-owned operation: {node.attr}")
         if isinstance(node, ast.Name) and id(node) not in literal_getattr and (node.id.startswith("__") or node.id in
                 {"open", "eval", "exec", "compile", "getattr", "setattr", "globals", "locals", "vars", "print", "FunctionTransformer"}):

@@ -78,14 +78,47 @@ def build():
 def test_lint_errors_name_the_rejected_construct():
     with pytest.raises(ValueError, match="Import of os is not allowed"):
         validate_source("import os\ndef build():\n    return {}\n")
-    splitter = ("from sklearn.model_selection import BaseCrossValidator\n"
-                "class Cut(BaseCrossValidator):\n"
-                "    def split(self, X, y=None, groups=None):\n        yield [0], [1]\n"
-                "    def get_n_splits(self, X=None, y=None, groups=None):\n        return 1\n"
-                "def build():\n    return {}\n")
-    with pytest.raises(ValueError, match="Class Cut.*without base classes"):
-        validate_source(splitter)
+    helper = "class Helper:\n    def run(self, x):\n        return x\ndef build():\n    return {}\n"
+    with pytest.raises(ValueError, match="Class Helper.*fine-grained DataOps"):
+        validate_source(helper)
 
+
+def test_custom_estimators_and_torch_modules_are_allowed():
+    validate_source('''
+import numpy as np
+import torch
+from torch import nn
+from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.linear_model import LogisticRegression
+
+class Net(nn.Module):
+    def __init__(self, width):
+        super().__init__()
+        self.layer = nn.Linear(width, 1)
+    def forward(self, x):
+        return self.layer(x)
+
+class Wrapped(ClassifierMixin, BaseEstimator):
+    def __init__(self, C=1.0):
+        self.C = C
+    def fit(self, X, y):
+        self._model = LogisticRegression(C=self.C).fit(X, y)
+        self.classes_ = self._model.classes_
+        net = Net(X.shape[1])
+        net.eval()
+        return self
+    def predict_proba(self, X):
+        return self._model.predict_proba(X)
+
+def build():
+    return {}
+''')
+    for body in ["        self.__dict__['a'] = 1", "        X.to_csv('x.csv')", "        torch.save(self, 'm.pt')"]:
+        with pytest.raises(ValueError):
+            validate_source("class E:\n    def fit(self, X, y=None):\n" + body + "\n        return self\n"
+                            "def build():\n    return {}\n")
+    with pytest.raises(ValueError, match="harness-owned"):
+        validate_source("def build():\n    return model.fit(X)\n")
 
 def test_installed_libraries_import_and_missing_ones_are_named():
     from nano_mle.plans import MissingLibrary

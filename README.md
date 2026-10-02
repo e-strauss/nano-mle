@@ -153,9 +153,13 @@ fine-grained DataOps graph.
 **Plan rules.** These are enforced by a source lint (`plans.py`) and a runtime graph
 check (`graphs.py`):
 - Readers are recorded with `skrub.as_data_op(path).skb.apply_func(pd.read_csv | pd.read_parquet, ...)`.
-- Computation is expressed as fine-grained DataOps. No UDFs, `deferred`, custom
-  transformers, callable `apply`/`map`, eager reads, materialised data, files, or
-  manual fitting.
+- Computation is expressed as fine-grained DataOps. No UDFs, `deferred`, callable
+  `apply`/`map`, eager reads, materialised data, files, or manual fitting in the graph.
+- Custom classes are allowed when they are estimators or transformers (`fit`), torch
+  modules (`forward`) or CV splitters, applied with `.skb.apply`. Inside them, fitting,
+  private state and `super().__init__()` are allowed. The guide asks for them only
+  when a step needs fitted state or is a new model. A plan-defined class inside the
+  locked X/y graph is fingerprinted by its source.
 - Any installed library may be imported, including lightgbm, xgboost, catboost, torch
   (CUDA), skorch, sentence-transformers, polars, faiss and rank_bm25. Modules that
   reach processes, files, the network or interpreter internals are denied.

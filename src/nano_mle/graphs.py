@@ -59,6 +59,12 @@ def validate_graph(plan):
                 raise ValueError("Callable map is opaque; dictionary/Series maps are supported")
 
 
+def class_methods(cls):
+    """Source fingerprint of a plan-defined class, so edits to it count as drift."""
+    return {name: ast.dump(ast.parse(textwrap.dedent(inspect.getsource(method))))
+            for name, method in vars(cls).items() if inspect.isfunction(method)}
+
+
 def canonical_graph(roots):
     nodes = {}
     seen = {}
@@ -98,8 +104,12 @@ def canonical_graph(roots):
         if isinstance(value, (tuple, list)):
             return {type(value).__name__: [encode(v) for v in value]}
         if isinstance(value, BaseEstimator):
-            return {"estimator": f"{type(value).__module__}.{type(value).__qualname__}",
-                    "parameters": encode(value.get_params(deep=False))}
+            cls = type(value)
+            description = {"estimator": f"{cls.__module__}.{cls.__qualname__}",
+                           "parameters": encode(value.get_params(deep=False))}
+            if cls.__module__ == "generated_plan":
+                description["methods"] = class_methods(cls)
+            return description
         if callable(value):
             if getattr(value, "__module__", "") == "generated_plan":
                 raise ValueError("Custom functions cannot be embedded as opaque graph operations")
@@ -108,8 +118,7 @@ def canonical_graph(roots):
             cls = type(value)
             description = {"splitter": f"{cls.__module__}.{cls.__qualname__}", "state": encode(vars(value))}
             if cls.__module__ == "generated_plan":
-                description["methods"] = {name: ast.dump(ast.parse(textwrap.dedent(inspect.getsource(method))))
-                                           for name, method in vars(cls).items() if inspect.isfunction(method)}
+                description["methods"] = class_methods(cls)
             return description
         if value is pd.NA:
             return {"missing": "pd.NA"}

@@ -248,3 +248,54 @@ def build():
     assert probed['status'] == 'ok', probed
     oof = pd.read_parquet(probed['probe']['path'])
     assert len(oof) == 60 and len(oof['y'][0]) == 2 and len(oof['prediction'][0]) == 2
+
+
+def test_pipeline_with_custom_transformer_and_estimator(tmp_path):
+    data = tmp_path / 'rows.csv'
+    pd.DataFrame([{'a': i % 7, 'b': i % 5, 'target': int(i % 7 > 3)} for i in range(60)]).to_csv(data, index=False)
+    source = f'''import pandas as pd
+import skrub
+from sklearn.model_selection import KFold
+
+def build():
+    data = skrub.as_data_op({str(data)!r}).skb.apply_func(pd.read_csv)
+    X = data[['a', 'b']].skb.mark_as_X(cv=KFold(3), split_kwargs={{}})
+    return {{'X': X, 'y': data['target'].skb.mark_as_y(), 'scoring': 'roc_auc'}}
+'''
+    setup = run_plan(tmp_path / 'setup', source, {'kind': 'evaluation'}, 60)
+    assert setup['status'] == 'ok', setup
+    contract = create_contract(setup['snapshot'], evaluation_source(source),
+                               EvaluationSpec(scoring='roc_auc', rationale='kfold'))
+    body = '''
+import numpy as np
+from sklearn.base import BaseEstimator, ClassifierMixin, TransformerMixin
+from sklearn.linear_model import LogisticRegression
+
+class Center(TransformerMixin, BaseEstimator):
+    def fit(self, X, y=None):
+        self.means_ = X.mean()
+        return self
+    def transform(self, X):
+        return X - self.means_
+
+class Wrapped(ClassifierMixin, BaseEstimator):
+    def __init__(self, C=1.0):
+        self.C = C
+    def fit(self, X, y):
+        self._model = LogisticRegression(C=self.C).fit(X, y)
+        self.classes_ = self._model.classes_
+        return self
+    def predict_proba(self, X):
+        return self._model.predict_proba(X)
+
+def build():
+    setup = build_evaluation()
+    features = setup['X'].skb.apply(Center())
+    model = skrub.choose_from({'weak': Wrapped(C=0.01), 'strong': Wrapped(C=10.0)}, name='model')
+    return {'pred': features.skb.apply(model, y=setup['y']), 'scoring': setup['scoring']}
+'''
+    result = run_plan(tmp_path / 'pipe', contract['setup_source'] + body,
+                      {'kind': 'pipeline', 'contract': contract, 'remaining_evaluations': 4,
+                       'folds_path': str(tmp_path / 'setup' / 'folds.npz')}, 120)
+    assert result['status'] == 'ok', result
+    assert result['evaluation_count'] == 2
