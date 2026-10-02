@@ -1,39 +1,61 @@
-"""Instructions for auditable agent-authored evaluation and pipeline graphs."""
+"""Instructions for the controller, planner and writer.
+
+The plan contract and library notes live in plans.GUIDE. The working conventions
+below are task-independent and adapted from mle-claude.
+"""
 from .plans import GUIDE
 
-PLAN_INSTRUCTIONS = GUIDE + """
-Evaluation setup is a special unscored phase. Use exploration evidence to construct
-representative modelling rows, raw labels and a defensible CV. Return marked X/y,
-scoring (a sklearn scorer string, or a scorer function when the task metric needs it),
-optional aligned unique row_keys and optional audit outputs.
-Investigate temporal label windows, join multiplicity, population coverage and leakage.
-Freeze all randomness in splitters. Custom splitter classes are permitted.
-Record readers with skrub.as_data_op(path).skb.apply_func(pd.read_csv, ...) or
-pd.read_parquet. Source paths are hints; construction is your responsibility.
+GOAL = """
+Goal: a model that scores well on the task's metric for the population it must
+predict. Cross-validation under the locked evaluation is how progress is measured;
+it is only as good as the evaluation setup is representative.
+"""
 
-For pipelines, include context.locked_evaluation_source and call build_evaluation().
-Take its X/y, build downstream features and estimators, and return a dict containing
-pred, the same scoring and the same row_keys if supplied. Equivalent inline graphs
-are allowed. Do not change population, labels or CV. Drift requires restoring the
-lock or a new workspace. Maintain row count and ordering downstream.
-Fine-grained graph-building helpers and loops are allowed; opaque runtime UDFs are not.
-Exploration returns named DataOps; the harness saves their graphs and outputs.
-Use separate selection, groupby, merge, assign and aggregation nodes.
-Never evaluate graphs, print results, cache features or score manually.
-A named choose_from grid becomes sibling candidates; respect evaluation budgets.
-Use the selected parent's resolved configuration rather than rerunning its grid.
-A repair fixes the planned experiment; a new hypothesis needs a new proposal.
+CONVENTIONS = """
+Working conventions:
+- Evaluation. Choose the population, labels, CV and scorer once, so scores stay
+  comparable. Make the rows and folds mirror the prediction setting (entities,
+  time, groups). Use the task's own metric when you can express it as a scorer.
+- Leakage 1, mark early. Mark X and the raw y as soon as rows and labels exist and
+  build features after the marks, so anything fit on the target sees training folds
+  only.
+- Leakage 2, where labels come from. Marking protects only the route through y. A
+  feature that depends on labels must take them from the marked y or from rows
+  provably disjoint from the modelled rows; reading the modelled rows' labels back
+  from a source table leaks identically in every fold. Prefer statistics estimated
+  on disjoint rows over leave-one-out corrections. In graph or neighbour features,
+  a walk that leaves a row and returns (d -> n -> d) hands it its own label.
+- Leakage 3, how to catch it. Distrust a large gain with an unusually small fold
+  std, and a feature whose standalone ranking is near-perfect on the rows it covers.
+- Audit new features. Check a feature's standalone signal on the rows it covers and
+  that its coverage and distribution match between modelled rows and the rows to be
+  predicted; a feature rich in training and empty at prediction time hurts.
+- Experiments. Change one thing per experiment so its effect is attributable. When a
+  change has natural variants (hyperparameters, estimators, feature blocks for an
+  ablation), express them as a named choose_from grid in one experiment instead of
+  stepping through them one at a time. Differences within the fold noise are not
+  evidence.
+- Data volume. Read only the columns you need, filter large tables to the relevant
+  rows before joining, and subsample deterministically in the plan when a full
+  table is unnecessary. Otherwise write the clearest plan: do not precompute,
+  memoise or restructure for speed.
 """
-CONTROL_INSTRUCTIONS = """
-Choose the next sequential action. Explore adaptively with concrete questions and
-observable stopping conditions. After sufficient evidence, propose establish_evaluation
-with a scorer, CV planning hints and rationale. The writer builds and audits this setup
-before any scored search. Once locked, explore or expand without changing evaluation.
-Inputs are assumed static/frozen; content verification is out of scope.
-Exploration produces evidence, not search reward. Honor all remaining budgets.
+
+PLAN_INSTRUCTIONS = GOAL + GUIDE + CONVENTIONS + """
+Evaluation setup is unscored: it builds and audits the rows, labels, CV and scorer
+that every later pipeline is scored with. Use exploration evidence for it.
+A repair fixes the planned experiment; a different hypothesis needs a new proposal.
 """
-PLANNING_INSTRUCTIONS = """
-Propose a bounded change to the selected resolved pipeline or request exploration.
-Use findings, supplied references and trajectory. Explain hypothesis and changes.
-Keep locked evaluation intact; use fine-grained Skrub graphs for all computations.
+
+CONTROL_INSTRUCTIONS = GOAL + """
+Choose the next action. Explore with a concrete question and an observable stopping
+condition whenever evidence is missing: before the evaluation setup, and later
+whenever results are unclear or progress stalls. Propose establish_evaluation once
+the population, labels, CV and metric are understood; it is locked afterwards.
+Exploration produces evidence, not search reward. Stay within the budgets.
+"""
+
+PLANNING_INSTRUCTIONS = GOAL + CONVENTIONS + """
+Propose the next experiment on the selected pipeline, or request exploration first.
+State the hypothesis and the changes, grounded in findings, references and history.
 """

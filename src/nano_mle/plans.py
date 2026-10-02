@@ -7,67 +7,57 @@ import ast
 
 
 GUIDE = """
-Write standalone Python containing imports, constants, graph-building helpers and
-one zero-argument build() function.
-Record reads directly: skrub.as_data_op(path).skb.apply_func(pd.read_csv, ...),
-or pd.read_parquet with columns/filters/storage_options. Paths come from task context.
-Input files are assumed frozen: do not hash, snapshot, or inspect them for changes.
-Exploration returns a dict of named DataOp outputs. Evaluation setup returns a dict
-with marked X, marked raw y, scoring, optional row_keys DataOp and optional audit dict
-of DataOps. scoring is a sklearn scorer string or a plain function
-scorer(estimator, X, y) -> float defined in the setup (higher is better). It is called
-on each test fold with the marked X of that fold, so columns kept in X (ids, group
-keys) are available to it. Pipeline returns {'pred': prediction_DataOp,
-'scoring': setup scoring, 'row_keys': same_optional_DataOp}.
-Build the modelling population and labels with explicit recorded operations. Mark
-X/y as soon as population and raw labels exist, before feature engineering. Attach
-an explicit deterministic cv and split_kwargs to mark_as_X. Built-in sklearn CV,
-custom splitter classes, and explicit fold sequences are supported.
-For KFold use split_kwargs={}; shuffle/random_state/n_splits belong to the splitter
-constructor. split_kwargs are arguments to splitter.split, e.g. groups for GroupKFold.
-Use fine-grained indexing, string/date operations, filters, joins, groupby/agg,
-assign and .skb.concat. Build-time helpers and loops are fine when they generate
-explicit graph nodes; never wrap a custom data-processing function as one node.
-apply_func is limited to known library primitives: pandas readers, to_datetime,
-to_numeric, concat; numpy where/select/isfinite/isinf/isnan; len.
-No deferred, UDFs, custom transformers, callable dataframe apply/map/transform,
-eager reads, materialized feature blocks, feature files, manual fit/scoring or eval.
-Dictionary and Series maps ARE allowed. Standard estimators use .skb.apply(...).
-Use named explicit skrub.choose_from grids only, downstream of the marked inputs.
-Once evaluation is locked, reuse locked_evaluation_source from context. It defines
-build_evaluation(); paste it into the standalone pipeline and call it, then build
-features/model downstream. Equivalent inline construction is also allowed, but the
-harness compares X/y/CV/scoring/row_keys graphs and effective folds before fitting.
-Drift must be repaired or evaluated in a fresh workspace, never silently relocked.
-Return code without markdown fences. Never embed credentials or add caching.
+Plan contract (checked by the harness):
+- Standalone Python with imports, constants, graph-building helpers and one
+  zero-argument build(). The harness builds the graph lazily and evaluates it.
+- Record reads: skrub.as_data_op(path).skb.apply_func(pd.read_csv | pd.read_parquet, ...)
+  with columns/filters/sep as needed. Paths come from the task sources.
+- Compute with fine-grained DataOps: indexing, filters, joins, groupby/agg, assign,
+  string/date operations, .skb.concat. Build-time helpers and loops are fine when they
+  emit explicit graph nodes. apply_func is limited to known library primitives
+  (pandas readers, to_datetime, to_numeric, concat; numpy where/select/isfinite/
+  isinf/isnan; len). No deferred, UDFs, custom transformers, callable
+  apply/map/transform, eager reads, materialised data or files. Dictionary and Series
+  maps are allowed. Estimators are applied with .skb.apply(...).
+- Exploration returns a dict of named DataOps; all are evaluated in one pass.
+- Evaluation setup returns {'X', 'y', 'scoring', optional 'row_keys', optional
+  'audit'}: X marked with mark_as_X(cv=..., split_kwargs=...) and the raw y marked
+  with mark_as_y(). scoring is a sklearn scorer string or a plain function
+  scorer(estimator, X, y) -> float defined in the setup (higher is better), called on
+  each test fold with that fold's marked X. CV is explicit and deterministic: sklearn
+  splitters, custom splitter classes or explicit folds. For KFold use split_kwargs={}
+  (n_splits/shuffle/random_state go to the constructor); split_kwargs are arguments
+  to split(), e.g. groups for GroupKFold.
+- Pipelines start from locked_evaluation_source: paste it, call build_evaluation(),
+  build features and the model downstream, and return {'pred', 'scoring':
+  setup scoring, 'row_keys': the same DataOp if declared}. The harness compares the
+  X/y/CV/scoring/row-key graphs and the folds with the lock before fitting; drift is
+  rejected. Keep the row count and order of X.
+- Named skrub.choose_from grids become one candidate per variant (within the
+  evaluation budget). Children receive the parent's resolved configuration.
+- Return code without markdown fences. No credentials, no manual fitting or scoring,
+  no caching.
 
-Skrub API notes (exact signatures; do not guess other keywords):
+Skrub and library notes (exact signatures; do not guess other keywords):
 - a.skb.concat([b, c], axis=0) takes only a list and axis; no ignore_index.
   Chain .reset_index(drop=True) afterwards if a fresh index is needed.
-- X.skb.apply(estimator, y=y) for the final classifier; there is no method= argument.
-  Scorers such as average_precision/roc_auc call predict_proba/decision_function
-  on the learner themselves. Optional *_kwargs args only pass extra arguments.
+- X.skb.apply(estimator, y=y) for the final model; there is no method= argument.
+  Scorers call predict_proba/decision_function on the learner themselves.
 - skrub.TableVectorizer(cardinality_threshold=40, low_cardinality=..., high_cardinality=...,
   numeric=..., datetime=..., specific_transformers=..., drop_null_fraction=...) takes only
-  these keyword arguments; there is no categorical= argument. Defaults: low_cardinality
-  one-hot, high_cardinality StringEncoder, numeric passthrough.
+  these keyword arguments; there is no categorical= argument.
 - Casts use dtypes: .astype("string"), .astype("float64") or .astype(str) are fine.
 - .skb.apply keeps DataFrame output, so sklearn encoders must produce dense output:
   OneHotEncoder(sparse_output=False, handle_unknown="ignore").
 - Any installed library can be imported; nothing is installed on demand. Installed
   ML libraries include scikit-learn, lightgbm, xgboost, catboost, torch (CUDA),
-  skorch, sentence-transformers, polars, faiss and rank_bm25. Estimators from any of
-  them are used with .skb.apply(...). Modules for processes, files or network access
-  (os, subprocess, pathlib, requests, ...) are not allowed.
-- Custom CV splitters are plain classes with no base class (not BaseCrossValidator)
-  defining split(self, X, y=None, groups=None) and get_n_splits(self, X=None,
-  y=None, groups=None).
+  skorch, sentence-transformers, polars, faiss and rank_bm25. Modules for processes,
+  files or network access (os, subprocess, pathlib, requests, ...) are not allowed.
+- Custom CV splitters are plain classes with no base class defining
+  split(self, X, y=None, groups=None) and get_n_splits(self, X=None, y=None, groups=None).
 - Boolean masks over nullable columns must not contain NA: use .fillna(False) or
   str methods with na=False before combining masks with & or |.
-- Exploration and audit output names are dict keys that must be valid Python
-  identifiers (letters, digits, underscores; e.g. coverage_2020, not "coverage-2020").
-  All outputs are evaluated together in one graph evaluation, so shared reads run
-  once; prefer a few focused summary tables over many large outputs.
+- Output names are dict keys that must be valid Python identifiers.
 """
 
 # Any installed library may be imported, except modules that reach outside the plan
