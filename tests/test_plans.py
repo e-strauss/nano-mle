@@ -55,3 +55,20 @@ def build():
 def test_eager_reader_alias_rejected():
     with pytest.raises(ValueError, match='Record readers'):
         validate_source('from pandas import read_csv as reader\ndef build():\n    return reader("data.csv")\n')
+
+
+def test_locked_setup_export_preserves_existing_helper():
+    from nano_mle.plans import evaluation_source
+    source = '''def build_evaluation():
+    return {'scoring': 'r2'}
+
+def locked_setup_entry():
+    return None
+
+def build():
+    return build_evaluation()
+'''
+    exported = evaluation_source(source)
+    namespace = {}
+    exec(exported, namespace)
+    assert namespace['build_evaluation']() == {'scoring': 'r2'}

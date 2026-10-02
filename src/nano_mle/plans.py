@@ -20,6 +20,8 @@ Build the modelling population and labels with explicit recorded operations. Mar
 X/y as soon as population and raw labels exist, before feature engineering. Attach
 an explicit deterministic cv and split_kwargs to mark_as_X. Built-in sklearn CV,
 custom splitter classes, and explicit fold sequences are supported.
+For KFold use split_kwargs={}; shuffle/random_state/n_splits belong to the splitter
+constructor. split_kwargs are arguments to splitter.split, e.g. groups for GroupKFold.
 Use fine-grained indexing, string/date operations, filters, joins, groupby/agg,
 assign and .skb.concat. Build-time helpers and loops are fine when they generate
 explicit graph nodes; never wrap a custom data-processing function as one node.
@@ -103,7 +105,34 @@ def validate_source(source):
 
 def evaluation_source(source):
     tree = validate_source(source)
-    next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "build").name = "build_evaluation"
+    # Preserve existing graph helpers, including a helper called build_evaluation.
+    # Rename the entry point to a fresh name, then expose a stable wrapper.
+    names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+    names.update(n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.ClassDef)))
+    entry = "locked_setup_entry"
+    while entry in names:
+        entry += "_"
+    helper = "locked_setup_helper"
+    while helper in names or helper == entry:
+        helper += "_"
+
+    class Rename(ast.NodeTransformer):
+        def visit_Name(self, node):
+            if node.id == "build":
+                node.id = entry
+            elif node.id == "build_evaluation":
+                node.id = helper
+            return node
+
+        def visit_FunctionDef(self, node):
+            if node.name == "build":
+                node.name = entry
+            elif node.name == "build_evaluation":
+                node.name = helper
+            return self.generic_visit(node)
+
+    tree = Rename().visit(tree)
+    tree.body.extend(ast.parse(f"def build_evaluation():\n    return {entry}()\n").body)
     return ast.unparse(tree) + "\n"
 
 

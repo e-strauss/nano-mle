@@ -69,6 +69,15 @@ no repairs. Three-fold CV RMSE improved from 0.21441 to 0.20773. This verifies t
 live execution path; it is not a benchmark of model quality. Local artifacts are
 under `workspaces/gpt61-sol-smoke-20261002/` and are excluded from Git.
 
+A second Sol smoke test exercised agent-authored evaluation on the same data.
+It exposed and fixed an exporter collision when setup code already defined a
+`build_evaluation` helper. The original run is preserved; a corrected checkpoint
+was reaudited to confirm identical X/y graphs and fold memberships before continuing.
+Across both stages it used 11 model calls, one exploration, one setup with one model
+repair, and one scored three-variant Ridge grid. Best RMSE was 0.20796 versus 0.21592
+for the alpha=1 baseline. Artifacts are under
+`workspaces/sol-graph-lock-smoke-20261002/`, including `run-summary.json`.
+
 The workspace contains `state.db` (authoritative journal), `workspace.json`
 (exported evaluation contract), `graph.json`, `report.md`, and `artifacts/`.
 Artifacts preserve model inputs/outputs, generated source, repair attempts,
