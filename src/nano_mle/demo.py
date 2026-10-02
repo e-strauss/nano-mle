@@ -27,24 +27,22 @@ class DemoBackend:
                         "Compare two Ridge regularization strengths", changes=["Regularization strength"])
 
     def implement(self, kind, context, intent):
+        path = repr(context["sources"]["train"]["path"])
+        reader = f"import pandas as pd\nimport skrub\nfrom sklearn.model_selection import KFold\n\ndef build():\n    data = skrub.as_data_op({path}).skb.apply_func(pd.read_csv)\n"
         if kind == "exploration":
-            return """def build(ctx):
-    data = ctx.read('train')
-    missing = data.isna()
-    counts = missing.sum()
-    summary = data.describe()
-    return {'missing_counts': counts, 'summary': summary}
-"""
+            return reader + "    return {'missing_counts': data.isna().sum(), 'summary': data.describe()}\n"
+        if kind == "evaluation":
+            target = repr(context["task"]["target"])
+            return reader + f"    X = data.drop(columns=[{target}]).skb.mark_as_X(cv=KFold(3, shuffle=True, random_state=42))\n    y = data[{target}].skb.mark_as_y()\n    return {{'X': X, 'y': y, 'scoring': 'neg_root_mean_squared_error'}}\n"
         alpha = "skrub.choose_from([0.1, 10.0], name='alpha')" if context["parent"] else "1.0"
-        return f"""import skrub
+        return context["locked_evaluation_source"] + f"""
 from sklearn.linear_model import Ridge
 
-def build(ctx):
-    X, y = ctx.load_xy()
-    encoded = X.skb.apply(skrub.TableVectorizer())
-    model = Ridge(alpha={alpha})
-    pred = encoded.skb.apply(model, y=y)
-    return pred
+def build():
+    setup = build_evaluation()
+    encoded = setup['X'].skb.apply(skrub.TableVectorizer())
+    pred = encoded.skb.apply(Ridge(alpha={alpha}), y=setup['y'])
+    return {{'pred': pred, 'scoring': setup['scoring']}}
 """
 
     def repair(self, kind, context, intent, source, error):
@@ -53,4 +51,4 @@ def build(ctx):
     def interpret(self, context, question, result):
         outputs = result["outputs"]
         return [Finding(statement="Computed per-column missing counts and numeric distributions",
-                        scope="Full pinned training CSV", evidence=str(outputs)[:6000])]
+                        scope="Full frozen training table", evidence=str(outputs)[:6000])]

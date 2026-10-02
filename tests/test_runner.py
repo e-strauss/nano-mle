@@ -6,7 +6,6 @@ import pytest
 from nano_mle.cli import make_demo
 from nano_mle.demo import DemoBackend
 from nano_mle.models import Budget, EvaluationSpec, Task
-from nano_mle.plans import PlanContext
 from nano_mle.runner import Runner, initialize
 from nano_mle.store import Store
 
@@ -39,7 +38,7 @@ def test_offline_workflow_and_graph_artifacts(tmp_path):
     assert siblings[0]["parent_id"] == siblings[1]["parent_id"] == candidates[0]["id"]
     assert siblings[0]["batch_id"] == siblings[1]["batch_id"]
     assert siblings[0]["configuration"] != siblings[1]["configuration"]
-    assert len(store.records("attempt")) == 4
+    assert len(store.records("attempt")) == 5
     assert store.meta("search_stats")["root"]["visits"] == 3
     assert all(e["status"] != "running" for e in explorations)
     for exploration in explorations:
@@ -64,23 +63,13 @@ def test_offline_workflow_and_graph_artifacts(tmp_path):
 
 def test_contract_requires_exploration_and_refuses_relocking(workspace):
     runner = Runner(workspace, DemoBackend())
-    spec = EvaluationSpec(scoring="r2", cv="kfold", rationale="test")
+    spec = EvaluationSpec(scoring="neg_root_mean_squared_error", cv="kfold", rationale="test")
     with pytest.raises(ValueError, match="Successful exploration"):
         runner.establish(spec)
     runner.store.put("exploration", {"id": "initial", "status": "ok"})
     runner.establish(spec)
     with pytest.raises(ValueError, match="already locked"):
         runner.establish(spec)
-    runner.store.close()
-
-
-def test_training_alias_cannot_bypass_marking(workspace):
-    runner = Runner(workspace, DemoBackend())
-    sources = runner.store.meta("sources")
-    sources["alias"] = sources["train"]
-    context = PlanContext(runner.task, sources, {"locked": True})
-    with pytest.raises(ValueError, match="aliases"):
-        context.read("alias")
     runner.store.close()
 
 
@@ -124,15 +113,16 @@ def test_interrupted_execution_is_charged_without_replay(workspace):
 
 class OversizedGrid(DemoBackend):
     def implement(self, kind, context, intent):
-        if kind == "exploration":
+        if kind != "pipeline":
             return super().implement(kind, context, intent)
-        return """import skrub
+        return context["locked_evaluation_source"] + """
 from sklearn.linear_model import Ridge
-def build(ctx):
-    X, y = ctx.load_xy()
+def build():
+    setup = build_evaluation()
     model = Ridge(alpha=skrub.choose_from([1.0, 2.0, 3.0], name='alpha'))
-    return X.skb.apply(model, y=y)
+    return {'pred': setup['X'].skb.apply(model, y=setup['y']), 'scoring': setup['scoring']}
 """
+
 
 
 def test_oversized_grid_is_rejected_before_scoring(workspace):
@@ -171,3 +161,23 @@ def test_failed_grid_preserves_and_charges_every_variant(workspace):
     assert sum(a["evaluation_count"] for a in store.records("attempt")) == 2
     assert store.meta("search_stats")["root"] == {"visits": 2, "reward_sum": -2}
     store.close()
+
+class DriftingBackend(DemoBackend):
+    def implement(self, kind, context, intent):
+        source = super().implement(kind, context, intent)
+        if kind == 'pipeline':
+            return source.replace('KFold(3,', 'KFold(4,')
+        return source
+
+
+def test_drift_is_warning_without_candidates_or_reward(workspace):
+    runner = Runner(workspace, DriftingBackend())
+    runner.explore('Inspect data', 'summary')
+    runner.establish(EvaluationSpec(scoring='neg_root_mean_squared_error', rationale='independent rows'))
+    assert 'build_evaluation' in runner.context()['locked_evaluation_source']
+    runner.expand()
+    assert runner.store.records('candidate') == []
+    assert runner.counts()['evaluations'] == 0
+    assert runner.store.records('expansion')[0]['status'] == 'rejected'
+    assert runner.store.meta('search_stats') == {}
+    runner.store.close()

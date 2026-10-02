@@ -54,7 +54,7 @@ class DSPyBackend:
             kind: str = dspy.InputField()
             context: str = dspy.InputField()
             intent: str = dspy.InputField()
-            source: str = dspy.OutputField(desc="Python source only, defining build(ctx)")
+            source: str = dspy.OutputField(desc="Python source only, defining zero-argument build()")
 
         class Repair(dspy.Signature):
             kind: str = dspy.InputField()

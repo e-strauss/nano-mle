@@ -4,10 +4,10 @@ import fcntl
 import json
 from pathlib import Path
 
-from .contracts import create_contract, digest, source_manifest, verify_contract, verify_sources
+from .contracts import create_contract, digest, source_manifest, verify_contract
 from .execution import run_plan
 from .models import Budget, Task
-from .plans import resolve_source, validate_source
+from .plans import evaluation_source, resolve_source, validate_source
 from .search import policy, update_stats, valid
 from .store import Store, new_id
 
@@ -53,6 +53,14 @@ def export_workspace(store):
     for candidate in sorted(candidates, key=lambda c: c["score"] if c["score"] is not None else float("-inf"), reverse=True):
         lines.append(f"| {candidate['id']} | {candidate['parent_id']} | {candidate['status']} | "
                      f"{candidate['score']} | {candidate.get('configuration_description', {})} |")
+    contract = store.meta("contract")
+    if contract and "audit" in contract:
+        lines += ["", "## Evaluation audit", "", json.dumps(contract["audit"], indent=2),
+                  "", "Inputs are assumed static/frozen; source contents are not checked."]
+    rejected = [e for e in store.records("expansion") if e.get("status") == "rejected"]
+    if rejected:
+        lines += ["", "## Evaluation drift warnings", ""]
+        lines.extend(f"- {e['id']}: {e['result']['error']}" for e in rejected)
     lines += ["", "## Findings", ""]
     for finding in store.records("finding"):
         lines.append(f"- {finding['id']}: {finding['statement']} ({finding['scope']})")
@@ -73,7 +81,7 @@ class Runner:
         self.notify = print
 
     def counts(self):
-        return {"explorations": len(self.store.records("exploration")),
+        return {"evaluation_setups": len(self.store.records("evaluation_setup")), "explorations": len(self.store.records("exploration")),
                 "expansions": len(self.store.records("expansion")),
                 "evaluations": sum(a.get("evaluation_count", 0) for a in self.store.records("attempt")),
                 "actions": self.store.meta("actions", 0),
@@ -88,6 +96,8 @@ class Runner:
         summary = ({k: contract[k] for k in ("id", "spec", "rows", "fold_fingerprint")}
                    if contract else None)
         context = {"task": self.task.model_dump(), "contract": summary,
+                   "sources": self.store.meta("sources"),
+                   "locked_evaluation_source": contract["setup_source"] if contract else None,
                    "findings": active_findings, "counts": self.counts(),
                    "budget": self.budget.model_dump(),
                    "remaining_evaluations": self.budget.max_evaluations - self.counts()["evaluations"],
@@ -144,6 +154,8 @@ class Runner:
             directory = self.workspace / "artifacts" / record["id"] / attempt_id
             request = {"kind": kind, "task": self.task.model_dump(), "sources": self.store.meta("sources"),
                        "remaining_evaluations": self.budget.max_evaluations - self.counts()["evaluations"]}
+            if kind == "evaluation":
+                request["expected_scoring"] = intent["scoring"]
             if kind == "pipeline":
                 request["contract"] = self.store.meta("contract")
             attempt = {"id": attempt_id, "owner_id": record["id"], "status": "running",
@@ -159,9 +171,11 @@ class Runner:
                 result = {"status": "failed", "error": str(error), "evaluation_count": 0}
                 (directory / "response.json").write_text(json.dumps(result))
             attempt.update(status=result["status"], evaluation_count=result.get("evaluation_count", 0))
+            if result.get("warning"):
+                attempt.update(warning=result["warning"], changed_components=result.get("changed_components"))
             self.store.put("attempt", attempt)
             record.setdefault("attempt_ids", []).append(attempt_id)
-            self.store.put("exploration" if kind == "exploration" else "expansion", record)
+            self.store.put({"exploration": "exploration", "evaluation": "evaluation_setup", "pipeline": "expansion"}[kind], record)
             self.store.event("execution_finished", owner_id=record["id"], attempt_id=attempt_id,
                              status=result["status"], evaluations=attempt["evaluation_count"])
             if result["status"] == "ok":
@@ -204,10 +218,24 @@ class Runner:
             raise ValueError("Evaluation is already locked; use a new workspace to change it")
         if not any(e["status"] == "ok" for e in self.store.records("exploration")):
             raise ValueError("Successful exploration is required before locking evaluation")
-        contract = create_contract(self.task, self.store.meta("sources"), spec)
+        if self.counts()["evaluation_setups"] >= self.budget.max_evaluation_setups:
+            raise ValueError("Evaluation setup budget exhausted")
+        record = {"id": new_id("setup"), "status": "running", "spec": spec.model_dump(), "attempt_ids": []}
+        self.store.put("evaluation_setup", record)
+        self.notify("Audit agent-authored evaluation setup")
+        result, attempt = self.execute("evaluation", record, self.context(), spec.model_dump())
+        record.update(status=result["status"], result=result, artifact_path=attempt["path"])
+        self.store.put("evaluation_setup", record)
+        if result["status"] != "ok":
+            export_workspace(self.store)
+            return
+        if result["snapshot"]["scoring"] != spec.scoring:
+            raise ValueError("Setup scoring must match the proposed scorer")
+        source = (self.workspace / attempt["path"] / "plan.py").read_text()
+        contract = create_contract(result["snapshot"], evaluation_source(source), spec)
         self.store.set_meta("contract", contract)
         self.store.event("evaluation_locked", contract_id=contract["id"])
-        self.notify(f"Locked {spec.scoring} with {spec.cv} ({spec.folds} folds)")
+        self.notify(f"Locked {spec.scoring}: {contract['rows']} rows")
         export_workspace(self.store)
 
     def expand(self):
@@ -243,6 +271,13 @@ class Runner:
         self.store.put("expansion", record)
         result, attempt = self.execute("pipeline", record, context, proposal.model_dump())
         record.update(status=result["status"], result=result)
+        if result.get("warning") == "contract_drift":
+            record.update(status="rejected", candidate_ids=[])
+            self.store.put("expansion", record)
+            self.store.event("contract_drift", error=result["error"], changed_components=result.get("changed_components"))
+            self.notify(result["error"])
+            export_workspace(self.store)
+            return
         source_path = self.workspace / attempt["path"] / "plan.py"
         variants = result.get("variants", [{"index": 0, "status": "failed", "score": None,
                                             "configuration": {}, "error": result.get("error")}])
@@ -271,7 +306,7 @@ class Runner:
                 attempt.update(status="interrupted", evaluation_count=json.loads(usage.read_text())["evaluation_count"]
                                if usage.exists() else 0)
                 self.store.put("attempt", attempt)
-        for kind in ("expansion", "exploration"):
+        for kind in ("expansion", "exploration", "evaluation_setup"):
             for record in self.store.records(kind):
                 if record["status"] == "running":
                     record.update(status="interrupted", error="Previous runner interrupted; artifacts retained")
@@ -282,7 +317,7 @@ class Runner:
                 self.store.put("model_call", call)
 
     def fail_active(self, error):
-        for kind in ("expansion", "exploration"):
+        for kind in ("expansion", "exploration", "evaluation_setup"):
             for record in self.store.records(kind):
                 if record["status"] == "running":
                     record.update(status="failed", error=error)
@@ -299,10 +334,11 @@ class Runner:
                 owns_lock = True
                 if self.store.meta("state") == "complete":
                     return
+                if self.store.meta("contract"):
+                    verify_contract(self.store.meta("contract"))
                 self.recover()
                 self.store.set_meta("state", "running")
                 while self.counts()["actions"] < self.budget.max_actions:
-                    verify_sources(self.store.meta("sources"))
                     if self.counts()["evaluations"] >= self.budget.max_evaluations:
                         self.store.event("stopped", reason="Evaluation budget exhausted")
                         break

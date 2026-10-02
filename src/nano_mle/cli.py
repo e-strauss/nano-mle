@@ -48,6 +48,7 @@ def main():
     init.add_argument("--max-expansions", type=int, default=6)
     init.add_argument("--max-explorations", type=int, default=8)
     init.add_argument("--max-evaluations", type=int, default=24)
+    init.add_argument("--max-evaluation-setups", type=int, default=3)
     init.add_argument("--max-actions", type=int, default=30)
     init.add_argument("--max-repairs", type=int, default=2)
     init.add_argument("--max-model-calls", type=int, default=80)
@@ -67,6 +68,7 @@ def main():
 
         budget = Budget(max_expansions=args.max_expansions, max_explorations=args.max_explorations,
                         max_evaluations=args.max_evaluations, max_actions=args.max_actions,
+                        max_evaluation_setups=args.max_evaluation_setups,
                         max_repairs=args.max_repairs, execution_timeout=args.execution_timeout,
                         max_model_calls=args.max_model_calls)
         initialize(args.workspace.resolve(), load_task(args.task), budget, args.policy)

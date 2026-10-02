@@ -1,84 +1,38 @@
-"""Versioned generation instructions, adapted from mle-claude's Skrub guide.
-
-The former exploration exception for plain pandas is intentionally removed.
-"""
-
+"""Instructions for auditable agent-authored evaluation and pipeline graphs."""
 from .plans import GUIDE
 
-
 PLAN_INSTRUCTIONS = GUIDE + """
+Evaluation setup is a special unscored phase. Use exploration evidence to construct
+representative modelling rows, raw labels and a defensible CV. Return marked X/y,
+a sklearn scorer string, optional aligned unique row_keys and optional audit outputs.
+Investigate temporal label windows, join multiplicity, population coverage and leakage.
+Freeze all randomness in splitters. Custom splitter classes are permitted.
+Record readers with skrub.as_data_op(path).skb.apply_func(pd.read_csv, ...) or
+pd.read_parquet. Source paths are hints; construction is your responsibility.
 
-Pipeline skeleton:
-    import skrub
-    from sklearn.ensemble import RandomForestRegressor
-
-    def build(ctx):
-        X, y = ctx.load_xy()
-        features = X.drop(columns=['id'])
-        encoded = features.skb.apply(skrub.TableVectorizer())
-        model = RandomForestRegressor(n_estimators=40, random_state=42, n_jobs=1)
-        pred = encoded.skb.apply(model, y=y)
-        return pred
-
-Exploration skeleton (all report computations are DataOps, not eager pandas):
-    def build(ctx):
-        data = ctx.read('train')
-        missing = data.isna()
-        missing_counts = missing.sum()
-        summary = data.describe()
-        target_counts = data['target'].value_counts()
-        return {'missing_counts': missing_counts, 'summary': summary,
-                'target_counts': target_counts}
-
-Feature construction: use separate selections, groupby/agg, renames, merges and
-assigns; avoid packing an entire feature builder into one node. No custom helpers.
-The ctx read is the single harness-controlled primitive for a CSV read.
-The harness evaluates returned exploration outputs and saves their graphs and values.
-Do not print, evaluate, or write results yourself. Never persist features for reuse.
-
-Grid example:
-    model = skrub.choose_from({
-        'small': RandomForestRegressor(n_estimators=20, random_state=42, n_jobs=1),
-        'large': RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=1),
-    }, name='model')
-    pred = encoded.skb.apply(model, y=y)
-Every resolved grid variant becomes a sibling candidate. Respect the remaining
-evaluation budget. Use explicit choices only. Named choice configurations store
-outcome INDICES, alongside human-readable descriptions; preserve a selected parent's
-resolved outcome when building from its code. Do not accidentally rerun its full grid.
-
-Leakage discipline:
-- X and RAW y are marked by load_xy before any feature engineering.
-- Labels used by learned transforms must originate from marked y, not a side file.
-- Other sources can also contain labels: early marking does not make those safe.
-- Investigate suspicious gains, near-perfect feature signals and coverage differences
-  between training and prediction populations. Small fold std alone is not proof.
-- Maintain row count/order for predictions. Drop identifier/group/time columns from
-  model features when appropriate; the contract's CV still uses its frozen rows.
-- Target transforms require inversion at prediction; prefer raw targets in this MVP.
-- Use no caching or execution optimization: preserve the logical computation graph.
-- A repair fixes the planned experiment. Changing its hypothesis is a new proposal.
-
-Only local CSV task sources and standard sklearn/Skrub estimators are supported in
-this prototype. Do not invent ctx methods or assume arbitrary shell access.
+For pipelines, include context.locked_evaluation_source and call build_evaluation().
+Take its X/y, build downstream features and estimators, and return a dict containing
+pred, the same scoring and the same row_keys if supplied. Equivalent inline graphs
+are allowed. Do not change population, labels or CV. Drift requires restoring the
+lock or a new workspace. Maintain row count and ordering downstream.
+Fine-grained graph-building helpers and loops are allowed; opaque runtime UDFs are not.
+Exploration returns named DataOps; the harness saves their graphs and outputs.
+Use separate selection, groupby, merge, assign and aggregation nodes.
+Never evaluate graphs, print results, cache features or score manually.
+A named choose_from grid becomes sibling candidates; respect evaluation budgets.
+Use the selected parent's resolved configuration rather than rerunning its grid.
+A repair fixes the planned experiment; a new hypothesis needs a new proposal.
 """
-
 CONTROL_INSTRUCTIONS = """
-Choose one next action for a sequential ML experiment. Explore first and adaptively
-when uncertainties, suspicious gains, join feasibility, or coverage need evidence.
-An exploration needs a concrete question and an observable stopping condition.
-Use establish_evaluation only after successful exploration supplies enough evidence
-to justify a single sklearn scorer string and kfold/stratified/group/time CV.
-The harness freezes all folds, sources and scoring. Once locked, expand or explore;
-do not change the contract. Honor remaining budgets. Stop if no useful work remains.
-Explorations produce evidence, not search rewards. Pipelines use fine-grained Skrub.
+Choose the next sequential action. Explore adaptively with concrete questions and
+observable stopping conditions. After sufficient evidence, propose establish_evaluation
+with a scorer, CV planning hints and rationale. The writer builds and audits this setup
+before any scored search. Once locked, explore or expand without changing evaluation.
+Inputs are assumed static/frozen; content verification is out of scope.
+Exploration produces evidence, not search reward. Honor all remaining budgets.
 """
-
 PLANNING_INSTRUCTIONS = """
-Plan a bounded change to the selected resolved pipeline, or request exploration
-before proposing it. Use the parent's resolved configuration, findings, branch
-trajectory and explicit candidate references. Explain the hypothesis and changes.
-For exploration state its question and stopping condition. After the requested
-rounds are exhausted, propose a feasible experiment using known evidence.
-Do not add candidate references that the search policy did not supply.
+Propose a bounded change to the selected resolved pipeline or request exploration.
+Use findings, supplied references and trajectory. Explain hypothesis and changes.
+Keep locked evaluation intact; use fine-grained Skrub graphs for all computations.
 """

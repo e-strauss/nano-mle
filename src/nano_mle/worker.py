@@ -13,15 +13,17 @@ import skrub
 from sklearn.base import BaseEstimator
 from sklearn.model_selection import ParameterGrid
 
-from .contracts import verify_contract, verify_sources
-from .models import Task
-from .plans import PlanContext, validate_source
+from .contracts import ContractDrift, verify_contract
+from .evaluation import audit_boundary
+from .graphs import validate_graph
+from .plans import validate_source
 
 
 def graph_artifact(plan, path):
     # Isolate the sole private Skrub API here; public describe_steps is also saved.
     from skrub._data_ops._evaluation import graph
 
+    validate_graph(plan)
     structure = graph(plan)
     node_ids = {id(value): key for key, value in structure["nodes"].items()}
 
@@ -47,10 +49,6 @@ def graph_artifact(plan, path):
             return {"callable": f"{getattr(value, '__module__', '')}.{getattr(value, '__qualname__', repr(value))}"}
         return {"type": type(value).__name__, "repr": repr(value)}
 
-    for node in structure["nodes"].values():
-        impl = node._skrub_impl
-        if type(impl).__name__ == "Call" and impl.func is not pd.read_csv:
-            raise ValueError("Opaque function node found: only harness CSV reads are allowed")
     serial = {"skrub_version": skrub.__version__, "edge_direction": "operation -> dependencies",
               "nodes": [{"id": key, "type": type(value._skrub_impl).__name__,
                          "operation": value.skb.describe_steps().splitlines()[-1],
@@ -76,20 +74,16 @@ def output_artifact(name, value, directory):
 
 
 def execute(request, directory):
-    task = Task.model_validate(request["task"])
-    manifest = request["sources"]
     contract = request.get("contract")
-    verify_sources(manifest)
     if contract:
         verify_contract(contract)
     source = (directory / "plan.py").read_text()
     validate_source(source)
-    context = PlanContext(task, manifest, contract)
     namespace = {"__name__": "generated_plan"}
     started = time.monotonic()
     with skrub.config_context(eager_data_ops=False):
         exec(compile(source, str(directory / "plan.py"), "exec"), namespace)
-        result = namespace["build"](context)
+        result = namespace["build"]()
     if request["kind"] == "exploration":
         if not isinstance(result, dict) or not result:
             raise ValueError("Exploration must return a nonempty dict of named DataOp outputs")
@@ -101,16 +95,27 @@ def execute(request, directory):
                 raise ValueError(f"Output {name!r} is not a DataOp")
             graph_artifact(plan, directory / name)
             outputs[name] = output_artifact(name, plan.skb.eval(), directory)
-        verify_sources(manifest)
         return {"status": "ok", "outputs": outputs, "duration_s": time.monotonic() - started}
-    if not isinstance(result, skrub.DataOp) or context.marked is None:
-        raise ValueError("Pipeline must return a DataOp using ctx.load_xy()")
-    found = result.skb.find_X_y()
-    if any(found.get(key) is None or found[key].skb.id != expected.skb.id
-           for key, expected in zip(("X", "y"), context.marked)):
-        raise ValueError("Prediction must use the harness-owned marked X and y")
-    graph_artifact(result, directory / "pipeline")
-    learner = result.skb.make_learner()
+    if request.get("expected_scoring") is not None and result.get("scoring") != request["expected_scoring"]:
+        raise ValueError("Setup scoring must match the proposed scorer")
+    snapshot = audit_boundary(result, contract)
+    (directory / "evaluation.graph.json").write_text(json.dumps(snapshot["boundary_graph"], indent=2))
+    if request["kind"] == "evaluation":
+        graph_artifact(result["X"], directory / "X")
+        graph_artifact(result["y"], directory / "y")
+        outputs = {}
+        for name, plan in result.get("audit", {}).items():
+            if not isinstance(name, str) or not name.isidentifier() or name.startswith("_") or not isinstance(plan, skrub.DataOp):
+                raise ValueError("Audit outputs must be named DataOps")
+            graph_artifact(plan, directory / f"audit_{name}")
+            outputs[name] = output_artifact(f"audit_{name}", plan.skb.eval(), directory)
+        return {"status": "ok", "snapshot": snapshot, "outputs": outputs,
+                "duration_s": time.monotonic() - started}
+    if contract is None:
+        raise ValueError("Scoring requires an audited, locked evaluation setup")
+    pred = result["pred"]
+    graph_artifact(pred, directory / "pipeline")
+    learner = pred.skb.make_learner()
     grid = ParameterGrid(learner.get_param_grid())
     if len(grid) > request["remaining_evaluations"]:
         raise ValueError(f"Grid has {len(grid)} variants, exceeding remaining evaluation budget")
@@ -118,18 +123,19 @@ def execute(request, directory):
     learner.get_named_params()
     pending = []
     for index, params in enumerate(grid):
-        resolved = result.skb.make_learner().set_params(**params)
+        resolved = pred.skb.make_learner().set_params(**params)
         pending.append({"index": index, "status": "failed", "score": None,
                         "configuration": resolved.get_named_params(),
                         "configuration_description": resolved.describe_params()})
     # Reserve before scoring: a crash/timeout is charged conservatively for the grid.
     (directory / "usage.json").write_text(json.dumps({"evaluation_count": len(grid), "variants": pending}))
-    search = result.skb.make_grid_search(fitted=True, refit=False, n_jobs=1,
-                                       scoring=contract["spec"]["scoring"], error_score=np.nan)
+    frozen = [(np.asarray(s["train"]), np.asarray(s["test"])) for s in contract["splits"]]
+    search = pred.skb.make_grid_search(fitted=True, refit=False, n_jobs=1, cv=frozen,
+                                     scoring=contract["scoring"], error_score=np.nan)
     raw = search.cv_results_
     variants = []
     for index, params in enumerate(raw["params"]):
-        resolved = result.skb.make_learner().set_params(**params)
+        resolved = pred.skb.make_learner().set_params(**params)
         folds = [float(raw[f"split{k}_test_score"][index]) for k in range(len(contract["splits"]))]
         valid = all(math.isfinite(score) for score in folds)
         variants.append({"index": index, "status": "ok" if valid else "failed",
@@ -152,6 +158,8 @@ def main():
     except Exception as error:
         response = {"status": "failed", "error": f"{type(error).__name__}: {error}",
                     "traceback": traceback.format_exc()[-12000:]}
+        if isinstance(error, ContractDrift):
+            response.update(warning="contract_drift", changed_components=error.changes)
     usage = directory / "usage.json"
     reserved = json.loads(usage.read_text()) if usage.exists() else {"evaluation_count": 0}
     response["evaluation_count"] = reserved["evaluation_count"]

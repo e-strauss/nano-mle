@@ -27,7 +27,10 @@ are loaded from `.env` only by that backend. Never commit credentials.
 
 ## Task and workspace
 
-Task JSON describes local CSV sources, target and columns excluded before marking:
+Task JSON supplies source-location hints and a description of the prediction setting.
+`train_source`, `target`, and `drop_columns` are optional planning hints; the writer
+constructs the actual modelling population and labels. Sources may be local paths
+or remote URIs such as `gs://bucket/table.parquet`:
 
 ```json
 {
@@ -77,45 +80,78 @@ and is not silently replayed.
 
 ## Plan interface
 
-Plans contain imports and one `build(ctx)` function. The harness disables eager
-previews during construction and evaluates the returned graph.
+Plans contain imports, optional graph-building helpers and one zero-argument
+`build()` function. No `common.py`, fixed reader adapter or `load_xy()` is required.
+The harness disables eager previews and evaluates returned DataOps.
 
-Exploration:
+Exploration uses recorded readers and fine-grained operations:
 
 ```python
-def build(ctx):
-    data = ctx.read("train")
-    missing = data.isna()
-    counts = missing.sum()
-    summary = data.describe()
-    return {"missing_counts": counts, "summary": summary}
+import pandas as pd
+import skrub
+
+def build():
+    data = skrub.as_data_op("train.csv").skb.apply_func(pd.read_csv)
+    return {"missing_counts": data.isna().sum(), "summary": data.describe()}
 ```
 
-Pipeline:
+After initial exploration, a **special unscored setup phase** constructs the
+population, raw labels and evaluation. Joins, filters, derived labels, reader
+options, custom CV splitters and graph-defined split kwargs are supported:
 
 ```python
-import skrub
+from sklearn.model_selection import KFold
+
+def build():
+    data = skrub.as_data_op("train.csv").skb.apply_func(pd.read_csv)
+    X = data.drop(columns=["target"]).skb.mark_as_X(
+        cv=KFold(3, shuffle=True, random_state=42))
+    y = data["target"].skb.mark_as_y()
+    return {"X": X, "y": y, "scoring": "neg_root_mean_squared_error"}
+```
+
+Optional `row_keys` must be unique, nonmissing and aligned with X/y. Optional
+`audit` is a dict of named DataOps whose outputs are saved. The harness checks
+population/label alignment, missing labels and valid nonoverlapping fold positions.
+It locks the logical X/y graphs, CV/split kwargs, scorer, optional row-key graph,
+row count and exact positional fold memberships. CV planning hints do not define
+splits; the recorded setup does.
+
+The writer receives this standalone setup as `locked_evaluation_source`, with
+`build()` renamed to `build_evaluation()`. A subsequent pipeline includes that code:
+
+```python
 from sklearn.linear_model import Ridge
 
-def build(ctx):
-    X, y = ctx.load_xy()
-    encoded = X.skb.apply(skrub.TableVectorizer())
+def build():
+    setup = build_evaluation()
+    encoded = setup["X"].skb.apply(skrub.TableVectorizer())
     model = Ridge(alpha=skrub.choose_from([0.1, 10.0], name="alpha"))
-    pred = encoded.skb.apply(model, y=y)
-    return pred
+    pred = encoded.skb.apply(model, y=setup["y"])
+    return {"pred": pred, "scoring": setup["scoring"]}
 ```
 
-`ctx.read` creates a recorded CSV-read node; `ctx.load_xy` creates recorded reads,
-marks raw X/y early and attaches the harness's frozen folds. Pipeline features
-must be built downstream of these marks. Pipelines cannot reread the training
-source as a constant side table. The harness evaluates all explicit variants
-with `make_grid_search`, saves their complete fold scores/configurations, and
-resolves a selected parent's choices before supplying its code to the coder.
+If setup declares row keys, return the same row-key DataOp with the prediction.
+Equivalent independently constructed graphs are accepted. Graph fingerprints
+ignore Skrub UUIDs and local variable names; comparison is structural, not a proof
+of semantic equivalence. Downstream features and models may change freely.
+Evaluation drift is warned about before fitting and passed into bounded repair.
+An unresolved drift creates no candidate or search reward. Restore the lock or
+start a fresh workspace; this prototype has one evaluation branch.
 
-Inputs are SHA256-pinned. Scoring and exact positional fold membership are locked
-after successful initial exploration. Supported CV: shuffled KFold, stratified,
-group and time. Time CV currently requires unique timestamps. Changes to input
-contents or the evaluation contract are rejected.
+**Inputs are assumed static/frozen.** Input contents and remote object versions
+are not checked or hashed. Hashes protect generated artifacts and contract metadata.
+All scoring uses the locked folds. Early marking does not prove freedom from
+leakage: side tables and downstream features still need investigation.
+
+Graph-building helpers and loops are allowed; opaque runtime UDFs, custom
+transformers and callable dataframe callbacks are rejected. Native library
+primitives are documented in [the plan guide](src/nano_mle/plans.py). The harness
+saves graphs and scores for every explicit grid variant and supplies resolved
+parent code to the next writer.
+
+Legacy `load_xy` workspaces remain readable, but cannot resume under this interface;
+create a new workspace. The historical live smoke run above used the old interface.
 
 ## Search experiments
 
@@ -135,14 +171,15 @@ source and errors; changing the experimental hypothesis requires a new proposal.
 
 ## Prototype boundaries
 
-- Local CSV sources and standard sklearn/Skrub estimators; GCS discovery, remote
-  source pinning, arbitrary raw-file population construction, custom/weighted
-  scorers, plots and final submission/refitting are not implemented yet.
+- Recorded CSV/Parquet readers support local/remote paths when the relevant pandas
+  engines/filesystem dependencies and credentials are installed. Remote GCS access
+  has not been tested here. Arbitrary shell/GCS discovery commands, custom scorers,
+  plots and final submission/refitting are outside this prototype.
 - No intermediate reuse, execution rewrites or caching layer. Graphs remain the
   deliverable for a future execution engine.
 - Source lint and runtime graph checks enforce the supported plan style. They
   are not a security sandbox or proof of no leakage; use trusted model-generated
   code and inspect findings and plans. Side tables still require provenance audits.
 - Workers are subprocesses with timeouts; the runner and grid execution are sequential.
-- One private Skrub graph-inspection API is isolated in `worker.py`, alongside
+- Private Skrub graph inspection is isolated in `graphs.py` and `worker.py`, alongside
   public textual graph exports. Dependencies are pinned in `uv.lock`.
