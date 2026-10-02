@@ -13,6 +13,33 @@ import type {
 
 type Rec = Record<string, any>;
 
+// A locked contract is immutable and can hold exact fold memberships (millions of row
+// positions on large tasks). Load it once per workspace, without its splits, and
+// afterwards only check that it still exists, which never reads the payload.
+const contracts = new Map<string, Rec>();
+
+function lockedContract(db: DatabaseSync, dir: string): Rec | undefined {
+  if (!db.prepare("SELECT 1 FROM meta WHERE key = 'contract'").get()) return undefined;
+  if (!contracts.has(dir)) {
+    const row = db.prepare("SELECT json_remove(payload, '$.splits') AS payload FROM meta WHERE key = 'contract'")
+      .get() as Rec;
+    contracts.set(dir, JSON.parse(row.payload));
+  }
+  return contracts.get(dir);
+}
+
+const setups = new Map<string, Rec>();
+
+function setupRecord(db: DatabaseSync, dir: string, id: string): Rec {
+  const key = `${dir}\0${id}`;
+  if (setups.has(key)) return { ...setups.get(key)! };
+  const row = db.prepare("SELECT json_remove(payload, '$.result.snapshot.splits') AS payload FROM records WHERE id = ?")
+    .get(id) as Rec;
+  const rec = JSON.parse(row.payload);
+  if (rec.status !== "running") setups.set(key, rec); // finished setups never change
+  return { ...rec };
+}
+
 class Workspace {
   meta: Record<string, any> = {};
   records: Map<string, Rec[]> = new Map();
@@ -22,11 +49,16 @@ class Workspace {
   constructor(public dir: string) {
     const db = new DatabaseSync(path.join(dir, "state.db"), { readOnly: true, timeout: 2000 });
     try {
-      for (const row of db.prepare("SELECT key, payload FROM meta").all() as Rec[]) {
+      for (const row of db.prepare("SELECT key, payload FROM meta WHERE key != 'contract'").all() as Rec[]) {
         this.meta[row.key] = JSON.parse(row.payload);
       }
-      for (const row of db.prepare("SELECT kind, payload FROM records ORDER BY seq").all() as Rec[]) {
-        const rec = JSON.parse(row.payload);
+      this.meta.contract = lockedContract(db, dir);
+      // Setup records repeat the fold memberships in their snapshot; same treatment.
+      const rows = db.prepare(
+        "SELECT kind, id, CASE WHEN kind = 'evaluation_setup' THEN NULL ELSE payload END AS payload FROM records ORDER BY seq",
+      ).all() as Rec[];
+      for (const row of rows) {
+        const rec = row.payload === null ? setupRecord(db, dir, row.id) : JSON.parse(row.payload);
         rec._seq = this.byId.size;
         if (!this.records.has(row.kind)) this.records.set(row.kind, []);
         this.records.get(row.kind)!.push(rec);
