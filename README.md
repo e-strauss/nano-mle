@@ -57,6 +57,7 @@ exploration and a two-variant grid.
      --max-evaluations 8 --max-repairs 2 --execution-timeout 1800
    uv run nano-mle run workspaces/my-run --model openai/gpt-6.1-sol
    uv run nano-mle show workspaces/my-run
+   uv run nano-mle draw workspaces/my-run/artifacts/<step>/<attempt> > graph.svg
    ```
 
    `--model` is any DSPy/LiteLLM model id. `run` also takes `--max-tokens`
@@ -214,7 +215,7 @@ still shows which phase was running.
 
 | File | Role |
 |---|---|
-| `cli.py` | Entry point: `init`, `run`, `show`, `demo`. |
+| `cli.py` | Entry point: `init`, `run`, `show`, `draw`, `demo`. |
 | `runner.py` | Controller loop, budgets, repair loop, exploration/setup/expansion, report export, resume. |
 | `agents.py` | DSPy backend: controller, planner, writer, repairer and interpreter signatures. |
 | `prompts.py` | Instructions for the controller, planner and writer. |
@@ -228,6 +229,7 @@ still shows which phase was running.
 | `search.py` | Greedy, MCTS and MCGS policies and reward updates. |
 | `store.py` | SQLite journal. |
 | `timing.py` | Phase timer for workers. |
+| `draw.py` | `nano-mle draw ATTEMPT`: rebuilds a recorded plan lazily and prints its Skrub `draw_graph` SVG. |
 | `demo.py` | Scripted offline backend. |
 
 `dashboard/` is an optional, harness-agnostic web UI for browsing runs, search trees
