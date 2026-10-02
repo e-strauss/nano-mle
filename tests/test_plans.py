@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import pytest
 import skrub
@@ -86,3 +87,13 @@ def test_lint_errors_name_the_rejected_construct():
                 "def build():\n    return {}\n")
     with pytest.raises(ValueError, match="Class Cut.*without base classes"):
         validate_source(splitter)
+
+
+def test_dtype_arguments_are_not_opaque_callables():
+    data = skrub.var("data")  # no value: no eager preview
+    validate_graph(data.assign(b=data["a"].astype(str), c=data["a"].astype(float)))
+    validate_graph(data["a"].astype(np.float64))
+    with pytest.raises(ValueError, match="'helper'.*clip"):
+        def helper(x):
+            return x
+        validate_graph(data["a"].clip(upper=helper))

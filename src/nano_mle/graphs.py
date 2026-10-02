@@ -23,20 +23,26 @@ PRIMITIVES = {pd.read_csv, pd.read_parquet, pd.to_datetime, pd.to_numeric, pd.co
               np.where, np.select, np.isfinite, np.isinf, np.isnan, len}
 
 
+def is_dtype(value):
+    """Types passed as dtypes (astype(str), np.float64) are values, not callbacks."""
+    return value in (str, int, float, bool) or (isinstance(value, type) and issubclass(value, np.generic))
+
+
 def validate_graph(plan):
     from skrub._data_ops._evaluation import graph
 
-    def check_callbacks(value):
-        if isinstance(value, skrub.DataOp):
+    def check_callbacks(value, method):
+        if isinstance(value, skrub.DataOp) or is_dtype(value):
             return
         if callable(value) and value not in PRIMITIVES:
-            raise ValueError("Opaque callable argument: use explicit recorded operations")
+            name = getattr(value, "__name__", None) or type(value).__name__
+            raise ValueError(f"Opaque callable argument {name!r} to .{method}(): use explicit recorded operations")
         if isinstance(value, Mapping):
             for item in value.values():
-                check_callbacks(item)
+                check_callbacks(item, method)
         elif isinstance(value, (tuple, list)):
             for item in value:
-                check_callbacks(item)
+                check_callbacks(item, method)
 
     for node in graph(plan)["nodes"].values():
         impl = node._skrub_impl
@@ -45,8 +51,8 @@ def validate_graph(plan):
         if type(impl).__name__ == "Value" and isinstance(impl.value, (pd.DataFrame, pd.Series, np.ndarray)):
             raise ValueError("Materialized data leaf: record reads and transformations inside the graph")
         if type(impl).__name__ == "CallMethod":
-            check_callbacks(impl.args)
-            check_callbacks(impl.kwargs)
+            check_callbacks(impl.args, impl.method_name)
+            check_callbacks(impl.kwargs, impl.method_name)
             if impl.method_name in {"apply", "transform", "pipe"}:
                 raise ValueError("Opaque dataframe callback: use explicit recorded operations")
             if impl.method_name == "map" and impl.args and callable(impl.args[0]):

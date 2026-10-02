@@ -44,6 +44,11 @@ Skrub API notes (exact signatures; do not guess other keywords):
 - X.skb.apply(estimator, y=y) for the final classifier; there is no method= argument.
   Scorers such as average_precision/roc_auc call predict_proba/decision_function
   on the learner themselves. Optional *_kwargs args only pass extra arguments.
+- skrub.TableVectorizer(cardinality_threshold=40, low_cardinality=..., high_cardinality=...,
+  numeric=..., datetime=..., specific_transformers=..., drop_null_fraction=...) takes only
+  these keyword arguments; there is no categorical= argument. Defaults: low_cardinality
+  one-hot, high_cardinality StringEncoder, numeric passthrough.
+- Casts use dtypes: .astype("string"), .astype("float64") or .astype(str) are fine.
 - Chain preprocessing as successive .skb.apply(...) steps; sklearn.pipeline is not
   importable. Allowed imports: skrub, pandas, numpy and sklearn submodules
   model_selection, ensemble, linear_model, preprocessing, impute, dummy, tree,
