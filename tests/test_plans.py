@@ -72,3 +72,17 @@ def build():
     namespace = {}
     exec(exported, namespace)
     assert namespace['build_evaluation']() == {'scoring': 'r2'}
+
+
+def test_lint_errors_name_the_rejected_construct():
+    with pytest.raises(ValueError, match="sklearn.pipeline"):
+        validate_source("from sklearn.pipeline import make_pipeline\ndef build():\n    return {}\n")
+    with pytest.raises(ValueError, match="Unsupported import os"):
+        validate_source("import os\ndef build():\n    return {}\n")
+    splitter = ("from sklearn.model_selection import BaseCrossValidator\n"
+                "class Cut(BaseCrossValidator):\n"
+                "    def split(self, X, y=None, groups=None):\n        yield [0], [1]\n"
+                "    def get_n_splits(self, X=None, y=None, groups=None):\n        return 1\n"
+                "def build():\n    return {}\n")
+    with pytest.raises(ValueError, match="Class Cut.*without base classes"):
+        validate_source(splitter)

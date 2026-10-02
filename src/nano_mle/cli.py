@@ -56,6 +56,8 @@ def main():
     run = sub.add_parser("run", help="Run/resume a workspace using the explicitly supplied model (API calls)")
     run.add_argument("workspace", type=Path)
     run.add_argument("--model", required=True, help="DSPy/LiteLLM model ID, e.g. gemini/gemini-3.8-flash")
+    run.add_argument("--max-tokens", type=int, default=16000, help="Completion-token cap per call, incl. reasoning")
+    run.add_argument("--request-timeout", type=int, default=180, help="Seconds per model request")
     show = sub.add_parser("show", help="Read the exported experiment report")
     show.add_argument("workspace", type=Path)
     demo = sub.add_parser("demo", help="Offline deterministic demonstration; no API calls")
@@ -77,7 +79,7 @@ def main():
         from .agents import DSPyBackend
         from .runner import Runner
 
-        Runner(args.workspace, DSPyBackend(args.model)).run()
+        Runner(args.workspace, DSPyBackend(args.model, args.max_tokens, args.request_timeout)).run()
     elif args.command == "show":
         print((args.workspace / "report.md").read_text())
     else:

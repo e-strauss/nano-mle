@@ -8,7 +8,7 @@ import ast
 
 GUIDE = """
 Write standalone Python containing imports, constants, graph-building helpers and
-one zero-argument build() function. There is no ctx, read adapter, or load_xy helper.
+one zero-argument build() function.
 Record reads directly: skrub.as_data_op(path).skb.apply_func(pd.read_csv, ...),
 or pd.read_parquet with columns/filters/storage_options. Paths come from task context.
 Input files are assumed frozen: do not hash, snapshot, or inspect them for changes.
@@ -37,6 +37,26 @@ features/model downstream. Equivalent inline construction is also allowed, but t
 harness compares X/y/CV/scoring/row_keys graphs and effective folds before fitting.
 Drift must be repaired or evaluated in a fresh workspace, never silently relocked.
 Return code without markdown fences. Never embed credentials or add caching.
+
+Skrub API notes (exact signatures; do not guess other keywords):
+- a.skb.concat([b, c], axis=0) takes only a list and axis; no ignore_index.
+  Chain .reset_index(drop=True) afterwards if a fresh index is needed.
+- X.skb.apply(estimator, y=y) for the final classifier; there is no method= argument.
+  Scorers such as average_precision/roc_auc call predict_proba/decision_function
+  on the learner themselves. Optional *_kwargs args only pass extra arguments.
+- Chain preprocessing as successive .skb.apply(...) steps; sklearn.pipeline is not
+  importable. Allowed imports: skrub, pandas, numpy and sklearn submodules
+  model_selection, ensemble, linear_model, preprocessing, impute, dummy, tree,
+  neighbors, svm.
+- Custom CV splitters are plain classes with no base class (not BaseCrossValidator)
+  defining split(self, X, y=None, groups=None) and get_n_splits(self, X=None,
+  y=None, groups=None).
+- Boolean masks over nullable columns must not contain NA: use .fillna(False) or
+  str methods with na=False before combining masks with & or |.
+- Exploration and audit output names are dict keys that must be valid Python
+  identifiers (letters, digits, underscores; e.g. coverage_2020, not "coverage-2020").
+  All outputs are evaluated together in one graph evaluation, so shared reads run
+  once; prefer a few focused summary tables over many large outputs.
 """
 
 ALLOWED_IMPORTS = {"skrub", "pandas", "numpy", "sklearn.model_selection", "sklearn.ensemble",
@@ -65,17 +85,23 @@ def validate_source(source):
     choice_names = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            if any(a.name not in ALLOWED_IMPORTS for a in node.names):
-                raise ValueError("Unsupported import")
+            rejected = [a.name for a in node.names if a.name not in ALLOWED_IMPORTS]
+            if rejected:
+                raise ValueError(f"Unsupported import {', '.join(rejected)}; allowed: {', '.join(sorted(ALLOWED_IMPORTS))}")
         if isinstance(node, ast.ImportFrom):
-            if node.level or node.module not in ALLOWED_IMPORTS or any(a.name == "*" for a in node.names):
-                raise ValueError("Unsupported import")
+            if node.level or node.module not in ALLOWED_IMPORTS:
+                raise ValueError(f"Unsupported import from {'.' * node.level}{node.module or ''}; "
+                                 f"allowed: {', '.join(sorted(ALLOWED_IMPORTS))}")
+            if any(a.name == "*" for a in node.names):
+                raise ValueError(f"Wildcard import from {node.module} is not supported")
             if any(a.name == "FunctionTransformer" for a in node.names):
                 raise ValueError("Custom function transformers are not supported")
         if isinstance(node, ast.ClassDef):
             methods = {m.name for m in node.body if isinstance(m, ast.FunctionDef)}
             if "split" not in methods or "get_n_splits" not in methods or node.bases or node.decorator_list:
-                raise ValueError("Custom classes are limited to CV splitters with split/get_n_splits")
+                raise ValueError(f"Class {node.name}: custom classes are limited to plain CV splitters defining "
+                                 "split and get_n_splits, without base classes (e.g. not BaseCrossValidator) "
+                                 "or decorators")
         if isinstance(node, ast.Attribute):
             if node.attr.startswith("_") or node.attr in FORBIDDEN:
                 raise ValueError(f"Unsupported opaque or harness-owned operation: {node.attr}")

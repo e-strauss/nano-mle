@@ -4,6 +4,8 @@ from .models import Decision, EvaluationSpec, Finding, Proposal
 
 
 class DemoBackend:
+    model = "demo"
+
     def control(self, context):
         counts = context["counts"]
         if counts["explorations"] == 0:

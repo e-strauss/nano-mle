@@ -35,7 +35,7 @@ def create_contract(snapshot, setup_source, spec):
 
 def verify_contract(contract):
     if contract.get("version") != 2:
-        raise ValueError("Legacy load_xy contract: start a new workspace for agent-authored evaluation")
+        raise ValueError(f"Unsupported evaluation contract version {contract.get('version')!r}; start a new workspace")
     if canonical_hash({k: v for k, v in contract.items() if k != "id"}) != contract["id"]:
         raise ValueError("Evaluation contract was modified")
 

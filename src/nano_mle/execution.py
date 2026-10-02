@@ -5,6 +5,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -15,6 +16,7 @@ def run_plan(directory: Path, source: str, request: dict, timeout: int):
     env = os.environ.copy()
     env.update({"MPLCONFIGDIR": str(directory / "mpl-cache"), "OMP_NUM_THREADS": "1",
                 "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"})
+    started = time.monotonic()
     with (directory / "execution.log").open("w") as log:
         child = subprocess.Popen([sys.executable, "-m", "nano_mle.worker", str(directory)],
                                  cwd=directory, env=env, stdout=log, stderr=log, start_new_session=True)
@@ -25,7 +27,12 @@ def run_plan(directory: Path, source: str, request: dict, timeout: int):
             child.wait()
             usage = directory / "usage.json"
             result = {"status": "failed", "error": f"Execution timed out after {timeout}s",
-                      "evaluation_count": json.loads(usage.read_text())["evaluation_count"] if usage.exists() else 0}
+                      "evaluation_count": json.loads(usage.read_text())["evaluation_count"] if usage.exists() else 0,
+                      "wall_s": time.monotonic() - started}
+            try:  # last phase reached before the kill; may be absent or half-written
+                result["timings"] = json.loads((directory / "timings.json").read_text())
+            except (OSError, ValueError):
+                pass
             if usage.exists():
                 result["variants"] = [{**v, "error": result["error"]}
                                       for v in json.loads(usage.read_text())["variants"]]
@@ -41,9 +48,13 @@ def run_plan(directory: Path, source: str, request: dict, timeout: int):
         usage = directory / "usage.json"
         reserved = json.loads(usage.read_text()) if usage.exists() else {"evaluation_count": 0}
         result = {"status": "failed", "error": f"Worker exited {child.returncode} without a response",
-                  "evaluation_count": reserved["evaluation_count"]}
+                  "evaluation_count": reserved["evaluation_count"], "wall_s": time.monotonic() - started}
         if "variants" in reserved:
             result["variants"] = [{**v, "error": result["error"]} for v in reserved["variants"]]
         response.write_text(json.dumps(result))
         return result
-    return json.loads(response.read_text())
+    result = json.loads(response.read_text())
+    # Wall time includes interpreter startup, which the worker cannot see.
+    result["wall_s"] = time.monotonic() - started
+    response.write_text(json.dumps(result, indent=2))
+    return result

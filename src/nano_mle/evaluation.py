@@ -7,6 +7,7 @@ from sklearn.metrics import get_scorer
 
 from .contracts import ContractDrift, canonical_hash, check_snapshot
 from .graphs import canonical_graph, fingerprint, validate_graph
+from .timing import NullPhases
 
 
 def describe_boundary(result, contract=None):
@@ -51,9 +52,18 @@ def describe_boundary(result, contract=None):
     return roots, components, canonical_graph(roots)
 
 
-def audit_boundary(result, contract=None):
-    roots, components, graph = describe_boundary(result, contract)
-    evaluated = skrub.as_data_op({k: v for k, v in roots.items() if k != "scoring"}).skb.eval()
+def audit_boundary(result, contract=None, phases=None):
+    phases = phases or NullPhases()
+    with phases("audit_fingerprint"):
+        roots, components, graph = describe_boundary(result, contract)
+    with phases("audit_eval_xy"):
+        # Eager: reads sources and builds the population, labels, CV and row keys.
+        evaluated = skrub.as_data_op({k: v for k, v in roots.items() if k != "scoring"}).skb.eval()
+    with phases("audit_checks"):
+        return _check_boundary(evaluated, roots, components, graph, contract)
+
+
+def _check_boundary(evaluated, roots, components, graph, contract):
     X, y = evaluated["X"], evaluated["y"]
     if not isinstance(X, pd.DataFrame) or not isinstance(y, pd.Series):
         raise ValueError("Marked population must be a DataFrame and raw y a Series")

@@ -40,6 +40,8 @@ def test_offline_workflow_and_graph_artifacts(tmp_path):
     assert siblings[0]["configuration"] != siblings[1]["configuration"]
     assert len(store.records("attempt")) == 5
     assert store.meta("search_stats")["root"]["visits"] == 3
+    assert store.meta("model") == "demo"
+    assert json.loads((root / "workspace.json").read_text())["model"] == "demo"
     assert all(e["status"] != "running" for e in explorations)
     for exploration in explorations:
         artifact = root / exploration["artifact_path"]

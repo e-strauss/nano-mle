@@ -39,7 +39,7 @@ def export_workspace(store):
     workspace = store.workspace
     candidates = store.records("candidate")
     metadata = {"task": store.meta("task"), "sources": store.meta("sources"),
-                "budget": store.meta("budget"), "policy": store.meta("policy"),
+                "budget": store.meta("budget"), "policy": store.meta("policy"), "model": store.meta("model"),
                 "state": store.meta("state"), "evaluation": store.meta("contract")}
     (workspace / "workspace.json").write_text(json.dumps(metadata, indent=2))
     graph = {"root": "root", "candidates": candidates,
@@ -48,7 +48,8 @@ def export_workspace(store):
              "evidence_links": [[e, c["id"]] for c in candidates for e in c["finding_ids"]],
              "search_stats": store.meta("search_stats")}
     (workspace / "graph.json").write_text(json.dumps(graph, indent=2))
-    lines = ["# Experiment report", "", f"Policy: {store.meta('policy')}; state: {store.meta('state')}", "",
+    lines = ["# Experiment report", "",
+             f"Policy: {store.meta('policy')}; model: {store.meta('model')}; state: {store.meta('state')}", "",
              "| Candidate | Parent | Status | Score | Configuration |", "|---|---|---|---:|---|"]
     for candidate in sorted(candidates, key=lambda c: c["score"] if c["score"] is not None else float("-inf"), reverse=True):
         lines.append(f"| {candidate['id']} | {candidate['parent_id']} | {candidate['status']} | "
@@ -337,6 +338,10 @@ class Runner:
                 if self.store.meta("contract"):
                     verify_contract(self.store.meta("contract"))
                 self.recover()
+                # A resumed run may use a different model; each session is recorded.
+                model = getattr(self.backend, "model", type(self.backend).__name__)
+                self.store.set_meta("model", model)
+                self.store.event("run_started", model=model)
                 self.store.set_meta("state", "running")
                 while self.counts()["actions"] < self.budget.max_actions:
                     if self.counts()["evaluations"] >= self.budget.max_evaluations:

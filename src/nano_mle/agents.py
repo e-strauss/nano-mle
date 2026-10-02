@@ -6,9 +6,9 @@ from typing import Protocol
 from .models import Decision, Finding, Proposal
 
 
-def lm_settings(model: str, max_tokens: int) -> dict:
+def lm_settings(model: str, max_tokens: int, timeout: int = 180) -> dict:
     settings = {"max_tokens": max_tokens, "temperature": 0.2, "num_retries": 0,
-                "timeout": 60, "cache": False}
+                "timeout": timeout, "cache": False}
     if model.removeprefix("openai/").startswith("gpt-6"):
         # DSPy's current reasoning-family detection only covers GPT-5/o-series.
         # Set the Chat Completions reasoning token cap explicitly for GPT-6.
@@ -26,7 +26,7 @@ class Backend(Protocol):
 
 
 class DSPyBackend:
-    def __init__(self, model: str, max_tokens=6000):
+    def __init__(self, model: str, max_tokens=16000, timeout=180):
         import os
         import dspy
         from dotenv import load_dotenv
@@ -34,8 +34,9 @@ class DSPyBackend:
         from .prompts import CONTROL_INSTRUCTIONS, PLAN_INSTRUCTIONS, PLANNING_INSTRUCTIONS
 
         load_dotenv()
+        self.model = model
         dspy.configure_cache(enable_disk_cache=False, enable_memory_cache=False)
-        kwargs = lm_settings(model, max_tokens)
+        kwargs = lm_settings(model, max_tokens, timeout)
         if model.startswith("gemini/"):
             kwargs["api_key"] = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
         self.lm = dspy.LM(model, **kwargs)

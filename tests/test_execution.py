@@ -9,3 +9,52 @@ def test_worker_timeout_is_recorded(tmp_path):
     assert result["status"] == "failed"
     assert "timed out" in result["error"]
     assert json.loads((directory / "response.json").read_text()) == result
+
+
+def test_named_outputs_share_one_evaluation(tmp_path, monkeypatch):
+    import pandas as pd
+    import skrub
+    from nano_mle import worker
+    from nano_mle.timing import Phases
+    from nano_mle.worker import evaluate_outputs
+
+    # The counting reader is a custom callable, which plan graphs reject; skip that check here.
+    monkeypatch.setattr(worker, "graph_artifact", lambda plan, path: None)
+
+    reads = []
+
+    def read(path):
+        reads.append(path)
+        return pd.DataFrame({"a": [1, 2, 2], "b": [3.0, None, 5.0]})
+
+    with skrub.config_context(eager_data_ops=False):  # as in the worker: no build-time previews
+        data = skrub.as_data_op("table.csv").skb.apply_func(read)
+        plans = {"rows": data.shape[0], "missing": data.isna().sum(), "values": data["a"].value_counts()}
+    phases = Phases(tmp_path / "timings.json")
+    outputs = evaluate_outputs(plans, tmp_path, phases)
+    assert reads == ["table.csv"]
+    assert set(outputs) == {"rows", "missing", "values"}
+    assert (tmp_path / "missing.csv").exists()
+    assert [p["phase"] for p in phases.items].count("eval_outputs") == 1
+
+
+def test_boundary_audit_evaluates_sources_once(tmp_path, monkeypatch):
+    import pandas as pd
+    import skrub
+    from sklearn.model_selection import KFold
+    from nano_mle import evaluation, graphs
+
+    reads = []
+
+    def read(path):
+        reads.append(path)
+        return pd.DataFrame({"a": range(9), "target": range(9)})
+
+    monkeypatch.setattr(evaluation, "validate_graph", lambda plan: None)
+    monkeypatch.setattr(graphs, "validate_graph", lambda plan: None)
+    with skrub.config_context(eager_data_ops=False):
+        data = skrub.as_data_op("t.csv").skb.apply_func(read)
+        X = data.drop(columns=["target"]).skb.mark_as_X(cv=KFold(3), split_kwargs={})
+        y = data["target"].skb.mark_as_y()
+        evaluation.audit_boundary({"X": X, "y": y, "scoring": "neg_mean_absolute_error"})
+    assert reads == ["t.csv"]
