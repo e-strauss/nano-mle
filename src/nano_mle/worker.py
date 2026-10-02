@@ -110,6 +110,20 @@ def prediction_of(estimator, X):
     return np.asarray(estimator.predict(X))
 
 
+def audit_outputs(audit):
+    """The setup's optional audit: one DataOp or a dict of named DataOps."""
+    if audit is None:
+        return {}
+    if isinstance(audit, skrub.DataOp):
+        return {"audit": audit}
+    if not isinstance(audit, dict):
+        raise ValueError("audit must be a DataOp or a dict of named DataOps")
+    for name, plan in audit.items():
+        if not isinstance(name, str) or not name.isidentifier() or name.startswith("_") or not isinstance(plan, skrub.DataOp):
+            raise ValueError(f"Audit outputs must be named DataOps with identifier names, got {name!r}")
+    return audit
+
+
 def probe(result, contract, request, directory, phases, started):
     """Fit one configuration on the locked folds and save its out-of-fold predictions.
 
@@ -186,6 +200,9 @@ def execute(request, directory, phases):
     if (request.get("expected_scoring") is not None and isinstance(result.get("scoring"), str)
             and result["scoring"] != request["expected_scoring"]):
         raise ValueError("Setup scoring must match the proposed scorer")
+    if request["kind"] == "evaluation":
+        # Checked before the boundary audit, which can take minutes on large data.
+        audit = audit_outputs(result.get("audit"))
     snapshot = audit_boundary(result, contract, phases)
     (directory / "evaluation.graph.json").write_text(json.dumps(snapshot["boundary_graph"], indent=2))
     if request["kind"] == "evaluation":
@@ -195,10 +212,6 @@ def execute(request, directory, phases):
         with phases("graph_artifact", output="X/y"):
             graph_artifact(result["X"], directory / "X")
             graph_artifact(result["y"], directory / "y")
-        audit = result.get("audit", {})
-        for name, plan in audit.items():
-            if not isinstance(name, str) or not name.isidentifier() or name.startswith("_") or not isinstance(plan, skrub.DataOp):
-                raise ValueError(f"Audit outputs must be named DataOps with identifier names, got {name!r}")
         outputs = evaluate_outputs(audit, directory, phases, prefix="audit_")
         return {"status": "ok", "snapshot": snapshot, "outputs": outputs,
                 "duration_s": time.monotonic() - started}

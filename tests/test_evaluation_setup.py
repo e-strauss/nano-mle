@@ -32,12 +32,14 @@ def build():
     population = eligible.merge(events, on='bbl', how='left')
     X = population.drop(columns=['violations']).skb.mark_as_X(cv=CutoffSplit())
     y = population['violations'].fillna(0).skb.mark_as_y()
-    return {{'X':X, 'y':y, 'row_keys':population[['bbl','cutoff']], 'scoring':'neg_mean_absolute_error'}}
+    return {{'X':X, 'y':y, 'row_keys':population[['bbl','cutoff']], 'scoring':'neg_mean_absolute_error',
+            'audit': population.groupby('cutoff').size()}}
 '''
     setup = run_plan(tmp_path/'setup',source,{'kind':'evaluation'},60)
     assert setup['status'] == 'ok', setup
     assert setup['snapshot']['rows'] == 8
     assert setup['snapshot']['audit']['folds'] == 2 and (tmp_path / 'setup' / 'folds.npz').exists()
+    assert 'audit' in setup['outputs']  # a single audit DataOp is accepted
     contract = create_contract(setup['snapshot'], evaluation_source(source), EvaluationSpec(scoring='neg_mean_absolute_error',rationale='Future cutoffs'))
     candidate = contract['setup_source'] + '''
 from sklearn.linear_model import Ridge

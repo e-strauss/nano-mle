@@ -26,8 +26,8 @@ Plan contract (checked by the harness):
   step needs fitted state or is a genuinely new model, e.g. a torch network.
 - Exploration returns a dict of named DataOps; all are evaluated in one pass.
 - Evaluation setup returns {'X', 'y', 'scoring', optional 'row_keys', optional
-  'audit'}: X marked with mark_as_X(cv=..., split_kwargs=...) and the raw y marked
-  with mark_as_y(). scoring is a sklearn scorer string or a plain function
+  'audit' (a DataOp or dict of named DataOps)}: X marked with
+  mark_as_X(cv=..., split_kwargs=...) and the raw y marked with mark_as_y(). scoring is a sklearn scorer string or a plain function
   scorer(estimator, X, y) -> float defined in the setup (higher is better), called on
   each test fold with that fold's marked X. CV is explicit and deterministic: sklearn
   splitters, custom splitter classes or explicit folds. For KFold use split_kwargs={}
