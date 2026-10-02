@@ -16,7 +16,7 @@ import skrub
 from sklearn.base import BaseEstimator
 from sklearn.model_selection import ParameterGrid
 
-from .contracts import ContractDrift, verify_contract
+from .contracts import ContractDrift, contract_folds, save_folds, verify_contract
 from .evaluation import audit_boundary
 from .graphs import validate_graph
 from .plans import validate_source
@@ -102,7 +102,7 @@ def prediction_of(estimator, X):
     return np.asarray(estimator.predict(X))
 
 
-def probe(result, contract, directory, phases, started):
+def probe(result, contract, request, directory, phases, started):
     """Fit one configuration on the locked folds and save its out-of-fold predictions.
 
     Evidence only: no candidate and no search reward. Predictions are captured by
@@ -116,7 +116,9 @@ def probe(result, contract, directory, phases, started):
     with phases("learner_and_grid"):
         if len(ParameterGrid(pred.skb.make_learner().get_param_grid())) != 1:
             raise ValueError("A probe evaluates one configuration; resolve choose_from to a single value")
-    frozen = [(np.asarray(s["train"]), np.asarray(s["test"])) for s in contract["splits"]]
+    with phases("load_folds"):
+        frozen = [(np.asarray(s["train"]), np.asarray(s["test"]))
+                  for s in contract_folds(contract, request.get("folds_path"))]
     base = result["scoring"] if contract["scoring"].startswith("custom:") else get_scorer(contract["scoring"])
     captured = []
 
@@ -177,6 +179,9 @@ def execute(request, directory, phases):
     snapshot = audit_boundary(result, contract, phases)
     (directory / "evaluation.graph.json").write_text(json.dumps(snapshot["boundary_graph"], indent=2))
     if request["kind"] == "evaluation":
+        with phases("write_folds"):
+            save_folds(directory / "folds.npz", snapshot["splits"])
+            snapshot = {**snapshot, "splits": None, "folds_file": "folds.npz"}
         with phases("graph_artifact", output="X/y"):
             graph_artifact(result["X"], directory / "X")
             graph_artifact(result["y"], directory / "y")
@@ -190,7 +195,7 @@ def execute(request, directory, phases):
     if contract is None:
         raise ValueError("Scoring requires an audited, locked evaluation setup")
     if request["kind"] == "probe":
-        return probe(result, contract, directory, phases, started)
+        return probe(result, contract, request, directory, phases, started)
     pred = result["pred"]
     with phases("graph_artifact", output="pipeline"):
         graph_artifact(pred, directory / "pipeline")
@@ -209,7 +214,9 @@ def execute(request, directory, phases):
                             "configuration_description": resolved.describe_params()})
     # Reserve before scoring: a crash/timeout is charged conservatively for the grid.
     (directory / "usage.json").write_text(json.dumps({"evaluation_count": len(grid), "variants": pending}))
-    frozen = [(np.asarray(s["train"]), np.asarray(s["test"])) for s in contract["splits"]]
+    with phases("load_folds"):
+        frozen = [(np.asarray(s["train"]), np.asarray(s["test"]))
+                  for s in contract_folds(contract, request.get("folds_path"))]
     folds = len(frozen)
     # A custom scorer is the pipeline's own copy of the locked setup function; the
     # boundary audit has already checked it against the contract's fingerprint.

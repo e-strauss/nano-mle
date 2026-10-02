@@ -37,7 +37,7 @@ def build():
     setup = run_plan(tmp_path/'setup',source,{'kind':'evaluation'},60)
     assert setup['status'] == 'ok', setup
     assert setup['snapshot']['rows'] == 8
-    assert len(setup['snapshot']['splits']) == 2
+    assert setup['snapshot']['audit']['folds'] == 2 and (tmp_path / 'setup' / 'folds.npz').exists()
     contract = create_contract(setup['snapshot'], evaluation_source(source), EvaluationSpec(scoring='neg_mean_absolute_error',rationale='Future cutoffs'))
     candidate = contract['setup_source'] + '''
 from sklearn.linear_model import Ridge
@@ -46,7 +46,7 @@ def build():
     pred = setup['X'].drop(columns=['bbl']).skb.apply(Ridge(), y=setup['y'])
     return {'pred':pred, 'scoring':setup['scoring'], 'row_keys':setup['row_keys']}
 '''
-    scored = run_plan(tmp_path/'candidate',candidate,{'kind':'pipeline','contract':contract,'remaining_evaluations':1},60)
+    scored = run_plan(tmp_path/'candidate',candidate,{'kind':'pipeline','contract':contract,'folds_path':str(tmp_path/'setup'/'folds.npz'),'remaining_evaluations':1},60)
     assert scored['status'] == 'ok', scored
     assert scored['evaluation_count'] == 1
 
@@ -76,7 +76,7 @@ def build():
     return {'pred': setup['X'].skb.apply(model, y=setup['y']), 'scoring': setup['scoring']}
 '''
     scored = run_plan(tmp_path / 'candidate', candidate,
-                      {'kind': 'pipeline', 'contract': contract, 'remaining_evaluations': 2}, 60)
+                      {'kind': 'pipeline', 'contract': contract, 'folds_path': str(tmp_path / 'setup' / 'folds.npz'), 'remaining_evaluations': 2}, 60)
     assert scored['status'] == 'ok', scored
     timings = scored['timings']
     names = [p['phase'] for p in timings['phases']]
@@ -139,12 +139,12 @@ def build():
     return {'pred': pred, 'scoring': setup['scoring']}
 '''
     scored = run_plan(tmp_path / 'candidate', contract['setup_source'] + pipeline,
-                      {'kind': 'pipeline', 'contract': contract, 'remaining_evaluations': 1}, 60)
+                      {'kind': 'pipeline', 'contract': contract, 'folds_path': str(tmp_path / 'setup' / 'folds.npz'), 'remaining_evaluations': 1}, 60)
     assert scored['status'] == 'ok', scored
     assert 0 <= scored['variants'][0]['score'] <= 1
     drifted = contract['setup_source'].replace('K = 2', 'K = 3') + pipeline
     rejected = run_plan(tmp_path / 'drift', drifted,
-                        {'kind': 'pipeline', 'contract': contract, 'remaining_evaluations': 1}, 60)
+                        {'kind': 'pipeline', 'contract': contract, 'folds_path': str(tmp_path / 'setup' / 'folds.npz'), 'remaining_evaluations': 1}, 60)
     assert rejected['status'] == 'failed' and rejected.get('warning') == 'contract_drift'
     assert 'scoring' in rejected['changed_components']
 
@@ -177,7 +177,7 @@ def build():
     return {{'pred': pred, 'scoring': setup['scoring'], 'row_keys': setup['row_keys']}}
 '''
     probed = run_plan(tmp_path / 'probe', contract['setup_source'] + body.format(c='1.0'),
-                      {'kind': 'probe', 'contract': contract}, 60)
+                      {'kind': 'probe', 'contract': contract, 'folds_path': str(tmp_path / 'setup' / 'folds.npz')}, 60)
     assert probed['status'] == 'ok', probed
     oof = pd.read_parquet(probed['probe']['path'])
     assert list(oof.columns) == ['row', 'row_key', 'fold', 'y', 'prediction']
@@ -185,5 +185,34 @@ def build():
     assert oof.loc[oof['row'] == 7, 'row_key'].item() == '1:2'
     assert probed['evaluation_count'] == 0
     grid = run_plan(tmp_path / 'grid', contract['setup_source'] + body.format(c="skrub.choose_from([0.1, 1.0], name='C')"),
-                    {'kind': 'probe', 'contract': contract}, 60)
+                    {'kind': 'probe', 'contract': contract, 'folds_path': str(tmp_path / 'setup' / 'folds.npz')}, 60)
     assert grid['status'] == 'failed' and 'single value' in grid['error']
+
+
+def test_contract_references_folds_instead_of_inlining_them(tmp_path):
+    import json
+    from nano_mle.contracts import contract_folds
+
+    data = tmp_path / 'train.csv'
+    pd.DataFrame({'a': range(30), 'target': range(30)}).to_csv(data, index=False)
+    source = f'''import pandas as pd
+import skrub
+from sklearn.model_selection import KFold
+
+def build():
+    data = skrub.as_data_op({str(data)!r}).skb.apply_func(pd.read_csv)
+    X = data.drop(columns=['target']).skb.mark_as_X(cv=KFold(3), split_kwargs={{}})
+    return {{'X': X, 'y': data['target'].skb.mark_as_y(), 'scoring': 'r2'}}
+'''
+    setup = run_plan(tmp_path / 'setup', source, {'kind': 'evaluation'}, 60)
+    contract = create_contract(setup['snapshot'], evaluation_source(source),
+                               EvaluationSpec(scoring='r2', rationale='iid'), folds_file='folds.npz')
+    assert 'splits' not in contract and len(json.dumps(contract)) < 20_000
+    folds = contract_folds(contract, tmp_path / 'setup' / 'folds.npz')
+    assert sorted(int(i) for f in folds for i in f['test']) == list(range(30))
+    corrupted = tmp_path / 'other.npz'
+    import numpy as np
+    np.savez(corrupted, train_0=np.arange(10), test_0=np.arange(10, 20))
+    import pytest
+    with pytest.raises(ValueError, match='does not match'):
+        contract_folds(contract, corrupted)

@@ -5,7 +5,7 @@ import pandas as pd
 import skrub
 from sklearn.metrics import get_scorer
 
-from .contracts import ContractDrift, canonical_hash, check_snapshot
+from .contracts import ContractDrift, canonical_hash, check_snapshot, folds_fingerprint
 from .graphs import canonical_graph, fingerprint, is_custom_scorer, scorer_fingerprint, validate_graph
 from .timing import NullPhases
 
@@ -99,7 +99,7 @@ def _check_boundary(evaluated, roots, components, graph, contract):
             raise ValueError("CV must yield nonempty unique integer row positions within the population")
         if np.intersect1d(a, b).size:
             raise ValueError("CV train and test rows overlap")
-        splits.append({"train": a.tolist(), "test": b.tolist()})
+        splits.append({"train": a, "test": b})
         if len(splits) > 100:
             raise ValueError("Setup exceeds the prototype limit of 100 folds")
     if len(splits) < 2:
@@ -108,7 +108,7 @@ def _check_boundary(evaluated, roots, components, graph, contract):
              "row_keys": "unique, nonmissing, aligned" if keys is not None else "not declared",
              "fold_sizes": [{"train": len(s["train"]), "test": len(s["test"])} for s in splits]}
     snapshot = {"components": components, "boundary_graph": graph, "scoring": roots["scoring"],
-                "rows": len(X), "splits": splits, "fold_fingerprint": canonical_hash(splits), "audit": audit}
+                "rows": len(X), "splits": splits, "fold_fingerprint": folds_fingerprint(splits), "audit": audit}
     if contract:
         check_snapshot(contract, snapshot)
     return snapshot

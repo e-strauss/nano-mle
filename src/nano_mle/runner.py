@@ -2,6 +2,7 @@
 
 import fcntl
 import json
+import shutil
 from pathlib import Path
 
 from .contracts import create_contract, digest, source_manifest, verify_contract
@@ -170,7 +171,10 @@ class Runner:
             if kind == "evaluation":
                 request["expected_scoring"] = intent["scoring"]
             if kind in ("pipeline", "probe"):
-                request["contract"] = self.store.meta("contract")
+                contract = self.store.meta("contract")
+                request["contract"] = contract
+                if contract.get("folds_file"):
+                    request["folds_path"] = str(self.workspace / contract["folds_file"])
             attempt = {"id": attempt_id, "owner_id": record["id"], "status": "running",
                        "path": str(directory.relative_to(self.workspace)), "repair_number": repair_number,
                        "evaluation_count": 0}
@@ -274,7 +278,11 @@ class Runner:
         if not locked.startswith("custom:") and locked != spec.scoring:
             raise ValueError("Setup scoring must match the proposed scorer")
         source = (self.workspace / attempt["path"] / "plan.py").read_text()
-        contract = create_contract(result["snapshot"], evaluation_source(source), spec)
+        folds = self.workspace / "evaluation" / "folds.npz"
+        folds.parent.mkdir(exist_ok=True)
+        shutil.copyfile(self.workspace / attempt["path"] / result["snapshot"]["folds_file"], folds)
+        contract = create_contract(result["snapshot"], evaluation_source(source), spec,
+                                   folds_file=str(folds.relative_to(self.workspace)))
         self.store.set_meta("contract", contract)
         self.store.event("evaluation_locked", contract_id=contract["id"])
         self.notify(f"Locked {locked}: {contract['rows']} rows")
