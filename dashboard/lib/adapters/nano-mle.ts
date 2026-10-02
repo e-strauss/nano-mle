@@ -122,6 +122,14 @@ function fmt(x: unknown): string {
   return JSON.stringify(x);
 }
 
+// sklearn reports mean seconds per fold; show it with the total over folds, which
+// is what the attempt's time breakdown (grid_search.fold_fit / fold_score) adds up.
+function perFold(label: string, mean: number | undefined, folds: number | undefined): [string, string][] {
+  if (typeof mean !== "number") return [[label, "—"]];
+  const total = folds ? ` · ${(mean * folds).toFixed(1)}s total over ${folds} folds` : "";
+  return [[label, `${mean.toFixed(1)}s per fold${total}`]];
+}
+
 function counts(ws: Workspace) {
   const attempts = ws.of("attempt");
   return {
@@ -345,7 +353,8 @@ function nodeSections(ws: Workspace, nodeId: string): Section[] {
     const out: Section[] = [{ title: "candidate", kind: "kv", content: [
       ["status", fmt(rec.status)], ["score", fmt(rec.score)], ["std", fmt(rec.std)],
       ["fold scores", (rec.fold_scores ?? []).map(fmt).join(" / ") || "—"],
-      ["fit time (s)", fmt(rec.mean_fit_time)], ["score time (s)", fmt(rec.mean_score_time)],
+      ...perFold("fit time", rec.mean_fit_time, rec.fold_scores?.length),
+      ...perFold("score time", rec.mean_score_time, rec.fold_scores?.length),
       ["parent", fmt(rec.parent_id)], ["references", (rec.reference_ids ?? []).join(", ") || "—"],
       ["batch", fmt(rec.batch_id)],
     ] }];
