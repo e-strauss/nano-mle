@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { score as fmtScore } from "@/lib/format";
 import { layout, type Placed, X_STEP, Y_STEP } from "@/lib/tree-layout";
 import type { EdgeKind, GraphEdge, GraphNode } from "@/lib/types";
@@ -80,10 +80,28 @@ export default function TreeView({ nodes, edges, selected, onSelect, bestId }: {
     const s = Math.max(v.w / rect.width, v.h / rect.height);
     return [dx * s, dy * s];
   };
+  // Plain wheel / two-finger scroll scrolls the page. Zoom only on pinch (reported
+  // as ctrlKey wheel events) or Ctrl/⌘ + wheel. Native non-passive listener, so
+  // the pinch can be kept from zooming the whole page.
+  const zoomRef = useRef<(factor: number, cx: number, cy: number) => void>(() => {});
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      const rect = svg.getBoundingClientRect();
+      zoomRef.current(e.deltaY > 0 ? 1.12 : 0.89, (e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height);
+    };
+    svg.addEventListener("wheel", onWheel, { passive: false });
+    return () => svg.removeEventListener("wheel", onWheel);
+  }, []);
+
   const zoom = (factor: number, cx = 0.5, cy = 0.5) => {
     const w = v.w * factor, h = v.h * factor;
     setView({ x: v.x + (v.w - w) * cx, y: v.y + (v.h - h) * cy, w, h });
   };
+  zoomRef.current = zoom;
 
   const groups = new Map<string, Placed[]>();
   for (const n of placed.values()) if (n.group) {
@@ -116,12 +134,9 @@ export default function TreeView({ nodes, edges, selected, onSelect, bestId }: {
           <button onClick={() => zoom(0.8)} aria-label="Zoom in">+</button>
           <button onClick={() => zoom(1.25)} aria-label="Zoom out">−</button>
           <button onClick={() => setView(null)}>Fit</button>
+          <span className="small muted" style={{ alignSelf: "center" }}>pinch or ⌘/Ctrl + scroll to zoom · drag to pan</span>
         </div>
         <svg ref={svgRef} viewBox={`${v.x} ${v.y} ${v.w} ${v.h}`} role="img" aria-label="Search tree"
-          onWheel={(e) => {
-            const rect = svgRef.current!.getBoundingClientRect();
-            zoom(e.deltaY > 0 ? 1.12 : 0.89, (e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height);
-          }}
           onPointerDown={(e) => { drag.current = { x: e.clientX, y: e.clientY, v }; }}
           onPointerMove={(e) => {
             if (!drag.current) return;
