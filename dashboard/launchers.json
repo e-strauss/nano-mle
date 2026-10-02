@@ -1,0 +1,210 @@
+{
+  "runsRoots": [
+    "../workspaces"
+  ],
+  "launchers": [
+    {
+      "id": "nano-mle",
+      "label": "nano-mle",
+      "description": "Initialise a nano-mle workspace, then run it with the given model (API calls).",
+      "cwd": "..",
+      "root": "../workspaces",
+      "workspace": "{root}/{name}",
+      "fields": [
+        {
+          "name": "name",
+          "label": "Run name",
+          "type": "slug",
+          "help": "New directory under the runs root"
+        },
+        {
+          "name": "task",
+          "label": "Task JSON",
+          "type": "file",
+          "glob": "task.json",
+          "roots": [
+            "../workspaces",
+            "../tasks"
+          ]
+        },
+        {
+          "name": "model",
+          "label": "Model",
+          "type": "text",
+          "default": "openai/gpt-6.1-sol",
+          "pattern": "^[A-Za-z0-9_./:-]+$"
+        },
+        {
+          "name": "policy",
+          "label": "Search policy",
+          "type": "select",
+          "options": [
+            "greedy",
+            "mcts",
+            "mcgs"
+          ],
+          "default": "greedy"
+        },
+        {
+          "name": "max_model_calls",
+          "label": "Max model calls",
+          "type": "int",
+          "default": 30,
+          "min": 1,
+          "max": 1000
+        },
+        {
+          "name": "max_expansions",
+          "label": "Max expansions",
+          "type": "int",
+          "default": 3,
+          "min": 1,
+          "max": 200
+        },
+        {
+          "name": "max_explorations",
+          "label": "Max explorations",
+          "type": "int",
+          "default": 4,
+          "min": 1,
+          "max": 200
+        },
+        {
+          "name": "max_evaluations",
+          "label": "Max evaluations",
+          "type": "int",
+          "default": 8,
+          "min": 1,
+          "max": 1000
+        },
+        {
+          "name": "max_evaluation_setups",
+          "label": "Max evaluation setups",
+          "type": "int",
+          "default": 2,
+          "min": 1,
+          "max": 20
+        },
+        {
+          "name": "max_repairs",
+          "label": "Max repairs per step",
+          "type": "int",
+          "default": 2,
+          "min": 0,
+          "max": 10
+        },
+        {
+          "name": "max_actions",
+          "label": "Max controller actions",
+          "type": "int",
+          "default": 12,
+          "min": 1,
+          "max": 500
+        },
+        {
+          "name": "execution_timeout",
+          "label": "Execution timeout (s)",
+          "type": "int",
+          "default": 1800,
+          "min": 10,
+          "max": 86400
+        },
+        {
+          "name": "max_tokens",
+          "label": "Completion tokens per call",
+          "type": "int",
+          "default": 16000,
+          "min": 1000,
+          "max": 128000
+        },
+        {
+          "name": "request_timeout",
+          "label": "Request timeout (s)",
+          "type": "int",
+          "default": 180,
+          "min": 10,
+          "max": 3600
+        }
+      ],
+      "steps": [
+        [
+          "uv",
+          "run",
+          "nano-mle",
+          "init",
+          "{workspace}",
+          "--task",
+          "{task}",
+          "--policy",
+          "{policy}",
+          "--max-model-calls",
+          "{max_model_calls}",
+          "--max-expansions",
+          "{max_expansions}",
+          "--max-explorations",
+          "{max_explorations}",
+          "--max-evaluations",
+          "{max_evaluations}",
+          "--max-evaluation-setups",
+          "{max_evaluation_setups}",
+          "--max-repairs",
+          "{max_repairs}",
+          "--max-actions",
+          "{max_actions}",
+          "--execution-timeout",
+          "{execution_timeout}"
+        ],
+        [
+          "uv",
+          "run",
+          "nano-mle",
+          "run",
+          "{workspace}",
+          "--model",
+          "{model}",
+          "--max-tokens",
+          "{max_tokens}",
+          "--request-timeout",
+          "{request_timeout}"
+        ]
+      ]
+    },
+    {
+      "id": "nano-mle-demo",
+      "label": "nano-mle offline demo (test)",
+      "description": "Deterministic offline demo, no API calls.",
+      "cwd": "..",
+      "root": "../workspaces",
+      "workspace": "{root}/{name}",
+      "fields": [
+        {
+          "name": "name",
+          "label": "Run name",
+          "type": "slug"
+        },
+        {
+          "name": "policy",
+          "label": "Search policy",
+          "type": "select",
+          "options": [
+            "greedy",
+            "mcts",
+            "mcgs"
+          ],
+          "default": "mcts"
+        }
+      ],
+      "steps": [
+        [
+          "uv",
+          "run",
+          "nano-mle",
+          "demo",
+          "{workspace}",
+          "--policy",
+          "{policy}"
+        ]
+      ]
+    }
+  ]
+}
