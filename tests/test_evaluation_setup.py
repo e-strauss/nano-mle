@@ -98,3 +98,52 @@ def test_timeout_reports_phase_in_progress(tmp_path):
     result = run_plan(tmp_path / 'slow', source, {'kind': 'exploration'}, 8)
     assert result['status'] == 'failed' and 'timed out' in result['error']
     assert result['timings']['in_progress'] == 'build_graph'
+
+
+def test_custom_scorer_is_locked_with_the_setup(tmp_path):
+    data = tmp_path / 'pairs.csv'
+    rows = [{'g': g, 't': t, 'a': (g * 7 + t * 3) % 5, 'target': int((g + t) % 3 == 0)}
+            for g in range(24) for t in range(5)]
+    pd.DataFrame(rows).to_csv(data, index=False)
+    source = f'''import numpy as np
+import pandas as pd
+import skrub
+from sklearn.model_selection import GroupKFold
+
+K = 2
+
+def top_k_recall(estimator, X, y):
+    scores = estimator.predict_proba(X)[:, 1]
+    frame = pd.DataFrame({{'g': X['g'].to_numpy(), 'y': np.asarray(y), 's': scores}})
+    top = frame.sort_values(['g', 's'], ascending=[True, False]).groupby('g').head(K)
+    hits = top.groupby('g')['y'].sum()
+    total = frame.groupby('g')['y'].sum()
+    return float((hits / total.clip(lower=1)).mean())
+
+def build():
+    data = skrub.as_data_op({str(data)!r}).skb.apply_func(pd.read_csv)
+    X = data[['g', 't', 'a']].skb.mark_as_X(cv=GroupKFold(3), split_kwargs={{'groups': data['g']}})
+    y = data['target'].skb.mark_as_y()
+    return {{'X': X, 'y': y, 'scoring': top_k_recall}}
+'''
+    setup = run_plan(tmp_path / 'setup', source, {'kind': 'evaluation', 'expected_scoring': 'recall@2'}, 60)
+    assert setup['status'] == 'ok', setup
+    assert setup['snapshot']['scoring'] == 'custom:top_k_recall'
+    contract = create_contract(setup['snapshot'], evaluation_source(source),
+                               EvaluationSpec(scoring='recall@2', rationale='per-group top-k'))
+    pipeline = '''
+from sklearn.linear_model import LogisticRegression
+def build():
+    setup = build_evaluation()
+    pred = setup['X'][['t', 'a']].skb.apply(LogisticRegression(), y=setup['y'])
+    return {'pred': pred, 'scoring': setup['scoring']}
+'''
+    scored = run_plan(tmp_path / 'candidate', contract['setup_source'] + pipeline,
+                      {'kind': 'pipeline', 'contract': contract, 'remaining_evaluations': 1}, 60)
+    assert scored['status'] == 'ok', scored
+    assert 0 <= scored['variants'][0]['score'] <= 1
+    drifted = contract['setup_source'].replace('K = 2', 'K = 3') + pipeline
+    rejected = run_plan(tmp_path / 'drift', drifted,
+                        {'kind': 'pipeline', 'contract': contract, 'remaining_evaluations': 1}, 60)
+    assert rejected['status'] == 'failed' and rejected.get('warning') == 'contract_drift'
+    assert 'scoring' in rejected['changed_components']

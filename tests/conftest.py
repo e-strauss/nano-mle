@@ -16,3 +16,5 @@ def pytest_runtest_setup(item):
 
 def pytest_runtest_teardown(item):
     item._no_live_backend.stop()
+import tempfile
+os.environ["NANO_MLE_MISSING_LIBRARIES"] = os.path.join(tempfile.mkdtemp(), "missing_libraries.json")

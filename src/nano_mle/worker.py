@@ -115,7 +115,8 @@ def execute(request, directory, phases):
                 raise ValueError(f"Output {name!r} is not a DataOp")
         outputs = evaluate_outputs(result, directory, phases)
         return {"status": "ok", "outputs": outputs, "duration_s": time.monotonic() - started}
-    if request.get("expected_scoring") is not None and result.get("scoring") != request["expected_scoring"]:
+    if (request.get("expected_scoring") is not None and isinstance(result.get("scoring"), str)
+            and result["scoring"] != request["expected_scoring"]):
         raise ValueError("Setup scoring must match the proposed scorer")
     snapshot = audit_boundary(result, contract, phases)
     (directory / "evaluation.graph.json").write_text(json.dumps(snapshot["boundary_graph"], indent=2))
@@ -152,9 +153,12 @@ def execute(request, directory, phases):
     (directory / "usage.json").write_text(json.dumps({"evaluation_count": len(grid), "variants": pending}))
     frozen = [(np.asarray(s["train"]), np.asarray(s["test"])) for s in contract["splits"]]
     folds = len(frozen)
+    # A custom scorer is the pipeline's own copy of the locked setup function; the
+    # boundary audit has already checked it against the contract's fingerprint.
+    scorer = result["scoring"] if contract["scoring"].startswith("custom:") else contract["scoring"]
     with phases("grid_search", variants=len(grid), folds=folds):
         search = pred.skb.make_grid_search(fitted=True, refit=False, n_jobs=1, cv=frozen,
-                                         scoring=contract["scoring"], error_score=np.nan)
+                                         scoring=scorer, error_score=np.nan)
     raw = search.cv_results_
     # Sequential search: summed fold times are a breakdown of grid_search; the rest
     # is search overhead, mainly evaluating the graph up to X/y again before splitting.

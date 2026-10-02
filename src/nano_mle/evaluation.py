@@ -6,7 +6,7 @@ import skrub
 from sklearn.metrics import get_scorer
 
 from .contracts import ContractDrift, canonical_hash, check_snapshot
-from .graphs import canonical_graph, fingerprint, validate_graph
+from .graphs import canonical_graph, fingerprint, is_custom_scorer, scorer_fingerprint, validate_graph
 from .timing import NullPhases
 
 
@@ -29,22 +29,31 @@ def describe_boundary(result, contract=None):
     if any(found.get(k) is None for k in ("X", "y", "cv")):
         raise ValueError("Explicit marked X/y and cv on mark_as_X are required")
     scoring = result.get("scoring")
-    if not isinstance(scoring, str):
-        raise ValueError("Declare one sklearn scorer string in the returned dict")
-    get_scorer(scoring)
+    if isinstance(scoring, str):
+        get_scorer(scoring)
+        scoring_label, scoring_print = scoring, fingerprint(scoring)
+    elif is_custom_scorer(scoring):
+        # A plain function defined in the setup, called as scorer(estimator, X, y)
+        # on each test fold (X is the marked X); higher is better.
+        if scoring.__code__.co_argcount != 3:
+            raise ValueError("A custom scorer must be a plain function scorer(estimator, X, y) -> float")
+        scoring_label, scoring_print = f"custom:{scoring.__name__}", scorer_fingerprint(scoring)
+    else:
+        raise ValueError("Declare scoring as a sklearn scorer string or a plain scorer(estimator, X, y) "
+                         "function defined in the evaluation setup")
     keys = result.get("row_keys")
     if keys is not None:
         if not isinstance(keys, skrub.DataOp):
             raise ValueError("row_keys must be a DataOp")
         validate_graph(keys)
     roots = {"X": found["X"], "y": found["y"], "cv": found["cv"],
-             "split_kwargs": found.get("split_kwargs") or {}, "scoring": scoring, "row_keys": keys}
+             "split_kwargs": found.get("split_kwargs") or {}, "scoring": scoring_label, "row_keys": keys}
     # X's SplitX wrapper carries CV; fingerprint its underlying population
     # independently so a splitter change produces a useful CV-specific warning.
     population = found["X"]._skrub_impl.X
     components = {"X": fingerprint(population), "y": fingerprint(found["y"]),
                   "cv": fingerprint({"cv": roots["cv"], "split_kwargs": roots["split_kwargs"]}),
-                  "scoring": fingerprint(scoring), "row_keys": fingerprint(keys)}
+                  "scoring": scoring_print, "row_keys": fingerprint(keys)}
     if contract:
         changed = [k for k in components if contract["components"].get(k) != components[k]]
         if changed:

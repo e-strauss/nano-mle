@@ -7,7 +7,8 @@ from pathlib import Path
 from .contracts import create_contract, digest, source_manifest, verify_contract
 from .execution import run_plan
 from .models import Budget, Task
-from .plans import evaluation_source, resolve_source, validate_source
+from .libraries import record_missing
+from .plans import MissingLibrary, evaluation_source, resolve_source, validate_source
 from .search import policy, update_stats, valid
 from .store import Store, new_id
 
@@ -167,6 +168,9 @@ class Runner:
                 validate_source(source)
                 result = run_plan(directory, source, request, self.budget.execution_timeout)
             except (SyntaxError, ValueError) as error:
+                if isinstance(error, MissingLibrary):
+                    record_missing(error.modules, self.workspace, record["id"])
+                    self.store.event("missing_library", modules=error.modules, owner_id=record["id"])
                 directory.mkdir(parents=True, exist_ok=True)
                 (directory / "plan.py").write_text(source)
                 result = {"status": "failed", "error": str(error), "evaluation_count": 0}
@@ -231,13 +235,14 @@ class Runner:
         if result["status"] != "ok":
             export_workspace(self.store)
             return
-        if result["snapshot"]["scoring"] != spec.scoring:
+        locked = result["snapshot"]["scoring"]
+        if not locked.startswith("custom:") and locked != spec.scoring:
             raise ValueError("Setup scoring must match the proposed scorer")
         source = (self.workspace / attempt["path"] / "plan.py").read_text()
         contract = create_contract(result["snapshot"], evaluation_source(source), spec)
         self.store.set_meta("contract", contract)
         self.store.event("evaluation_locked", contract_id=contract["id"])
-        self.notify(f"Locked {spec.scoring}: {contract['rows']} rows")
+        self.notify(f"Locked {locked}: {contract['rows']} rows")
         export_workspace(self.store)
 
     def expand(self):

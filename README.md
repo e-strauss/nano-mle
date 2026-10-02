@@ -135,13 +135,24 @@ def build():
     return {"pred": pred, "scoring": setup["scoring"]}
 ```
 
+**Scoring.** The setup's `scoring` is either a scikit-learn scorer string or a plain
+function `scorer(estimator, X, y) -> float` defined in the setup (higher is better).
+It runs on each test fold with that fold's marked X, so ids and group keys kept in X
+can drive grouped metrics such as per-entity recall@k. A custom scorer is locked like
+a custom splitter: by its source plus the plan helpers and upper-case constants it uses.
+
 **Plan rules.** These are enforced by a source lint (`plans.py`) and a runtime graph
 check (`graphs.py`):
 - Readers are recorded with `skrub.as_data_op(path).skb.apply_func(pd.read_csv | pd.read_parquet, ...)`.
-- `apply_func` accepts only known library primitives.
-- No UDFs, `deferred`, custom transformers, callable `apply`/`map`, eager reads,
-  materialised data, files, manual fitting or scoring.
-- Imports come from an allowlist: skrub, pandas, numpy and selected sklearn modules.
+- Computation is expressed as fine-grained DataOps. No UDFs, `deferred`, custom
+  transformers, callable `apply`/`map`, eager reads, materialised data, files, or
+  manual fitting.
+- Any installed library may be imported, including lightgbm, xgboost, catboost, torch
+  (CUDA), skorch, sentence-transformers, polars, faiss and rank_bm25. Modules that
+  reach processes, files, the network or interpreter internals are denied.
+- The harness never installs packages. An import of a missing library fails the
+  attempt and is recorded in `missing_libraries.json` at the repository root (also
+  shown in the dashboard), so you can decide what to add.
 
 These checks enforce the plan style. They are not a security sandbox or a proof of
 no leakage.
@@ -229,6 +240,7 @@ still shows which phase was running.
 | `search.py` | Greedy, MCTS and MCGS policies and reward updates. |
 | `store.py` | SQLite journal. |
 | `timing.py` | Phase timer for workers. |
+| `libraries.py` | Repository-level record of imported-but-missing libraries. |
 | `draw.py` | `nano-mle draw ATTEMPT`: rebuilds a recorded plan lazily and prints its Skrub `draw_graph` SVG. |
 | `demo.py` | Scripted offline backend. |
 
@@ -242,7 +254,7 @@ are not implemented, such as multiple evaluation branches.
   There is no intermediate caching: shared reads are recomputed across attempts,
   and inside the grid search for every fold.
 - **Data access:** only CSV and Parquet readers are supported; local and `gs://`
-  paths work with the installed `gcsfs`/`pyarrow`. Shell access, custom scorers,
-  plots, and final refitting or submission files are out of scope.
+  paths work with the installed `gcsfs`/`pyarrow`. Shell access, plots, and final
+  refitting or submission files are out of scope.
 - **Trust:** generated code is trusted. Workers are timeout-bounded subprocesses,
   not a sandbox.

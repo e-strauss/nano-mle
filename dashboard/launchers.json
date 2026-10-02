@@ -11,7 +11,8 @@
         "nano-mle",
         "draw",
         "{attempt}"
-      ]
+      ],
+      "missingLibraries": "../missing_libraries.json"
     }
   },
   "launchers": [

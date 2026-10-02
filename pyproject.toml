@@ -8,15 +8,24 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
+    "catboost>=1.2.10",
     "dspy>=3.4.0",
+    "faiss-cpu>=1.15.1",
     "gcsfs>=2026.10.0",
+    "lightgbm>=4.7.0",
     "numpy>=2.5.3",
     "pandas>=3.0.6",
+    "polars>=1.44.2",
     "pyarrow>=25.0.1",
     "pydantic>=2.13.5",
     "python-dotenv>=1.2.4",
+    "rank-bm25>=0.2.2",
     "scikit-learn>=1.9.1",
+    "sentence-transformers>=6.1.0",
+    "skorch>=1.4.0",
     "skrub>=0.11.0",
+    "torch>=2.14.1",
+    "xgboost>=3.4.1",
 ]
 
 [project.scripts]
@@ -30,3 +39,13 @@ build-backend = "uv_build"
 dev = [
     "pytest>=9.1.1",
 ]
+
+# The default PyPI torch wheel targets CUDA 13, which this machine's driver rejects
+# (torch.cuda.is_available() is False). Use the cu126 build, as mle-claude does.
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }

@@ -76,9 +76,7 @@ def build():
 
 
 def test_lint_errors_name_the_rejected_construct():
-    with pytest.raises(ValueError, match="sklearn.pipeline"):
-        validate_source("from sklearn.pipeline import make_pipeline\ndef build():\n    return {}\n")
-    with pytest.raises(ValueError, match="Unsupported import os"):
+    with pytest.raises(ValueError, match="Import of os is not allowed"):
         validate_source("import os\ndef build():\n    return {}\n")
     splitter = ("from sklearn.model_selection import BaseCrossValidator\n"
                 "class Cut(BaseCrossValidator):\n"
@@ -87,6 +85,16 @@ def test_lint_errors_name_the_rejected_construct():
                 "def build():\n    return {}\n")
     with pytest.raises(ValueError, match="Class Cut.*without base classes"):
         validate_source(splitter)
+
+
+def test_installed_libraries_import_and_missing_ones_are_named():
+    from nano_mle.plans import MissingLibrary
+
+    validate_source("import lightgbm\nfrom xgboost import XGBClassifier\nimport polars as pl\n"
+                    "def build():\n    return {}\n")
+    with pytest.raises(MissingLibrary) as error:
+        validate_source("import definitely_not_installed_pkg\ndef build():\n    return {}\n")
+    assert error.value.modules == ["definitely_not_installed_pkg"]
 
 
 def test_dtype_arguments_are_not_opaque_callables():

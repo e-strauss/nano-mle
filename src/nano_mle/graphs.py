@@ -121,3 +121,29 @@ def canonical_graph(roots):
 
 def fingerprint(value):
     return canonical_hash(canonical_graph({"root": value}))
+
+
+def is_custom_scorer(value):
+    return inspect.isfunction(value) and value.__module__ == "generated_plan"
+
+
+def scorer_fingerprint(scorer):
+    """Locks a setup-defined scorer by its source and the plan helpers/constants it uses.
+
+    Pipelines paste the locked setup source, so an unchanged scorer reproduces the
+    same fingerprint; editing it or any helper it calls is reported as drift.
+    """
+    parts, seen, pending = {}, set(), [scorer]
+    while pending:
+        fn = pending.pop()
+        if fn.__name__ in seen:
+            continue
+        seen.add(fn.__name__)
+        parts[fn.__name__] = ast.dump(ast.parse(textwrap.dedent(inspect.getsource(fn))))
+        for name in fn.__code__.co_names:
+            value = fn.__globals__.get(name)
+            if is_custom_scorer(value):
+                pending.append(value)
+            elif isinstance(value, (int, float, str, bool, tuple)) and name.isupper():
+                parts[f"const:{name}"] = repr(value)
+    return canonical_hash({"scorer": scorer.__name__, "parts": parts})

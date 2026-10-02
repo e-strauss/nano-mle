@@ -183,3 +183,14 @@ def test_drift_is_warning_without_candidates_or_reward(workspace):
     assert runner.store.records('expansion')[0]['status'] == 'rejected'
     assert runner.store.meta('search_stats') == {}
     runner.store.close()
+
+
+def test_missing_libraries_are_recorded_once_per_module(tmp_path, monkeypatch):
+    from nano_mle.libraries import record_missing, record_path
+
+    monkeypatch.setenv("NANO_MLE_MISSING_LIBRARIES", str(tmp_path / "missing.json"))
+    record_missing(["somelib"], tmp_path / "ws1", "exploration_a")
+    record_missing(["somelib", "otherlib"], tmp_path / "ws2", "expansion_b")
+    data = json.loads(record_path().read_text())
+    assert data["somelib"]["count"] == 2 and len(data["somelib"]["workspaces"]) == 2
+    assert data["otherlib"]["count"] == 1

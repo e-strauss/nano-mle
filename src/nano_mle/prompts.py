@@ -4,7 +4,8 @@ from .plans import GUIDE
 PLAN_INSTRUCTIONS = GUIDE + """
 Evaluation setup is a special unscored phase. Use exploration evidence to construct
 representative modelling rows, raw labels and a defensible CV. Return marked X/y,
-a sklearn scorer string, optional aligned unique row_keys and optional audit outputs.
+scoring (a sklearn scorer string, or a scorer function when the task metric needs it),
+optional aligned unique row_keys and optional audit outputs.
 Investigate temporal label windows, join multiplicity, population coverage and leakage.
 Freeze all randomness in splitters. Custom splitter classes are permitted.
 Record readers with skrub.as_data_op(path).skb.apply_func(pd.read_csv, ...) or

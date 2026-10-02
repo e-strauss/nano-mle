@@ -26,7 +26,9 @@ export type Launcher = {
 };
 
 // Optional per-adapter commands, e.g. drawing an attempt's graph on demand.
-export type Harness = { cwd: string; draw?: string[] };
+// missingLibraries: a JSON record {module: {count, first_seen, last_seen, workspaces}}
+// of libraries plans imported that were not installed (seconds since epoch).
+export type Harness = { cwd: string; draw?: string[]; missingLibraries?: string };
 
 export type Config = {
   runsRoots: string[];
@@ -53,7 +55,8 @@ export function loadConfig(): Config {
   return {
     runsRoots: merged.runsRoots.map((r) => path.resolve(DASHBOARD_DIR, r)),
     harnesses: Object.fromEntries(Object.entries(merged.harnesses)
-      .map(([k, h]) => [k, { ...h, cwd: path.resolve(DASHBOARD_DIR, h.cwd) }])),
+      .map(([k, h]) => [k, { ...h, cwd: path.resolve(DASHBOARD_DIR, h.cwd),
+        missingLibraries: h.missingLibraries && path.resolve(DASHBOARD_DIR, h.missingLibraries) }])),
     launchers: merged.launchers.map((l) => ({
       ...l,
       cwd: path.resolve(DASHBOARD_DIR, l.cwd),

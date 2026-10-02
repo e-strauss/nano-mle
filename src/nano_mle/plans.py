@@ -13,9 +13,12 @@ Record reads directly: skrub.as_data_op(path).skb.apply_func(pd.read_csv, ...),
 or pd.read_parquet with columns/filters/storage_options. Paths come from task context.
 Input files are assumed frozen: do not hash, snapshot, or inspect them for changes.
 Exploration returns a dict of named DataOp outputs. Evaluation setup returns a dict
-with marked X, marked raw y, a sklearn scoring string, optional row_keys DataOp and
-optional audit dict of DataOps. Pipeline returns {'pred': prediction_DataOp,
-'scoring': scoring_string, 'row_keys': same_optional_DataOp}.
+with marked X, marked raw y, scoring, optional row_keys DataOp and optional audit dict
+of DataOps. scoring is a sklearn scorer string or a plain function
+scorer(estimator, X, y) -> float defined in the setup (higher is better). It is called
+on each test fold with the marked X of that fold, so columns kept in X (ids, group
+keys) are available to it. Pipeline returns {'pred': prediction_DataOp,
+'scoring': setup scoring, 'row_keys': same_optional_DataOp}.
 Build the modelling population and labels with explicit recorded operations. Mark
 X/y as soon as population and raw labels exist, before feature engineering. Attach
 an explicit deterministic cv and split_kwargs to mark_as_X. Built-in sklearn CV,
@@ -51,10 +54,11 @@ Skrub API notes (exact signatures; do not guess other keywords):
 - Casts use dtypes: .astype("string"), .astype("float64") or .astype(str) are fine.
 - .skb.apply keeps DataFrame output, so sklearn encoders must produce dense output:
   OneHotEncoder(sparse_output=False, handle_unknown="ignore").
-- Chain preprocessing as successive .skb.apply(...) steps; sklearn.pipeline is not
-  importable. Allowed imports: skrub, pandas, numpy and sklearn submodules
-  model_selection, ensemble, linear_model, preprocessing, impute, dummy, tree,
-  neighbors, svm.
+- Any installed library can be imported; nothing is installed on demand. Installed
+  ML libraries include scikit-learn, lightgbm, xgboost, catboost, torch (CUDA),
+  skorch, sentence-transformers, polars, faiss and rank_bm25. Estimators from any of
+  them are used with .skb.apply(...). Modules for processes, files or network access
+  (os, subprocess, pathlib, requests, ...) are not allowed.
 - Custom CV splitters are plain classes with no base class (not BaseCrossValidator)
   defining split(self, X, y=None, groups=None) and get_n_splits(self, X=None,
   y=None, groups=None).
@@ -66,14 +70,35 @@ Skrub API notes (exact signatures; do not guess other keywords):
   once; prefer a few focused summary tables over many large outputs.
 """
 
-ALLOWED_IMPORTS = {"skrub", "pandas", "numpy", "sklearn.model_selection", "sklearn.ensemble",
-                   "sklearn.linear_model", "sklearn.preprocessing", "sklearn.impute",
-                   "sklearn.dummy", "sklearn.tree", "sklearn.neighbors", "sklearn.svm"}
+# Any installed library may be imported, except modules that reach outside the plan
+# (processes, files, network, interpreter internals). Plans that import a library
+# which is not installed fail with MissingLibrary; the runner records it.
+DENIED_MODULES = {"os", "sys", "subprocess", "shutil", "pathlib", "socket", "ctypes", "importlib",
+                  "builtins", "multiprocessing", "threading", "pickle", "dill", "joblib", "marshal",
+                  "requests", "urllib", "http", "ftplib", "smtplib", "tempfile", "glob", "io", "gc"}
+
+
+class MissingLibrary(ValueError):
+    def __init__(self, modules):
+        self.modules = sorted(modules)
+        super().__init__(f"Library not installed: {', '.join(self.modules)}. The harness does not install "
+                         "packages; use an installed library instead (see the plan guide).")
+
+
+def installed(module):
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ValueError):
+        return False
+
+
 FORBIDDEN = {"deferred", "eval", "exec", "preview", "get_data", "set_data", "get_vars",
              "make_grid_search", "make_randomized_search", "make_learner", "with_scoring",
              "cross_validate", "iter_cv_splits", "train_test_split", "subsample",
              "choose_float", "choose_int", "choose_bool", "optional", "fit", "fit_transform",
-             "predict", "to_csv", "to_parquet", "to_pickle", "to_json", "to_sql", "save", "dump"}
+             "to_csv", "to_parquet", "to_pickle", "to_json", "to_sql", "save", "dump"}
 
 
 def validate_source(source):
@@ -105,17 +130,25 @@ def validate_source(source):
                     and call.func.value.id in pandas_aliases)
         return getattr(call.func, "id", "") in readers
     choice_names = set()
+    imported = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            rejected = [a.name for a in node.names if a.name not in ALLOWED_IMPORTS]
-            if rejected:
-                raise ValueError(f"Unsupported import {', '.join(rejected)}; allowed: {', '.join(sorted(ALLOWED_IMPORTS))}")
+            imported.update(a.name for a in node.names)
         if isinstance(node, ast.ImportFrom):
-            if node.level or node.module not in ALLOWED_IMPORTS:
-                raise ValueError(f"Unsupported import from {'.' * node.level}{node.module or ''}; "
-                                 f"allowed: {', '.join(sorted(ALLOWED_IMPORTS))}")
+            if node.level or not node.module:
+                raise ValueError("Relative imports are not supported")
             if any(a.name == "*" for a in node.names):
                 raise ValueError(f"Wildcard import from {node.module} is not supported")
+            imported.add(node.module)
+    denied = sorted(m for m in imported if m.split(".")[0] in DENIED_MODULES)
+    if denied:
+        raise ValueError(f"Import of {', '.join(denied)} is not allowed: plans may not access processes, "
+                         "files, the network or interpreter internals")
+    missing = {m.split(".")[0] for m in imported if not installed(m.split(".")[0])}
+    if missing:
+        raise MissingLibrary(missing)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
             if any(a.name == "FunctionTransformer" for a in node.names):
                 raise ValueError("Custom function transformers are not supported")
         if isinstance(node, ast.ClassDef):
