@@ -41,7 +41,8 @@ export function SectionView({ s, runId, depth = 0 }: { s: Section; runId: string
       case "json": return <pre className="wrap">{JSON.stringify(s.content, null, 2)}</pre>;
       case "kv": return (
         <table className="kv"><tbody>
-          {s.content.map(([k, v]) => <tr key={k}><td>{k}</td><td className="mono">{v}</td></tr>)}
+          {/* labels can repeat (e.g. verify_contract runs twice), so key by position */}
+          {s.content.map(([k, v], i) => <tr key={i}><td>{k}</td><td className="mono">{v}</td></tr>)}
         </tbody></table>
       );
       case "files": return <Files runId={runId} files={s.content} />;
