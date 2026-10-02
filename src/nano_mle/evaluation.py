@@ -74,11 +74,12 @@ def audit_boundary(result, contract=None, phases=None):
 
 def _check_boundary(evaluated, roots, components, graph, contract):
     X, y = evaluated["X"], evaluated["y"]
-    if not isinstance(X, pd.DataFrame) or not isinstance(y, pd.Series):
-        raise ValueError("Marked population must be a DataFrame and raw y a Series")
+    if not isinstance(X, pd.DataFrame) or not isinstance(y, (pd.Series, pd.DataFrame)):
+        raise ValueError("Marked population must be a DataFrame and raw y a Series "
+                         "(or a DataFrame for multi-output labels)")
     if not len(X) or len(X) != len(y) or not X.index.equals(y.index):
         raise ValueError("X/y must be nonempty, equal-length, and aligned on their row index")
-    if y.isna().any():
+    if np.asarray(y.isna()).any():
         raise ValueError("Raw labels contain missing values; revise population/label construction")
     keys = evaluated.get("row_keys")
     if keys is not None:

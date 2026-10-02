@@ -145,6 +145,12 @@ def validate_source(source):
     missing = {m.split(".")[0] for m in imported if not installed(m.split(".")[0])}
     if missing:
         raise MissingLibrary(missing)
+    # getattr with a literal public attribute name is plain attribute access.
+    literal_getattr = {id(n.func) for n in ast.walk(tree)
+                       if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "getattr"
+                       and 2 <= len(n.args) <= 3 and not n.keywords and isinstance(n.args[1], ast.Constant)
+                       and isinstance(n.args[1].value, str) and n.args[1].value.isidentifier()
+                       and not n.args[1].value.startswith("_") and n.args[1].value not in FORBIDDEN}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             if any(a.name == "FunctionTransformer" for a in node.names):
@@ -158,7 +164,7 @@ def validate_source(source):
         if isinstance(node, ast.Attribute):
             if node.attr.startswith("_") or node.attr in FORBIDDEN:
                 raise ValueError(f"Unsupported opaque or harness-owned operation: {node.attr}")
-        if isinstance(node, ast.Name) and (node.id.startswith("__") or node.id in
+        if isinstance(node, ast.Name) and id(node) not in literal_getattr and (node.id.startswith("__") or node.id in
                 {"open", "eval", "exec", "compile", "getattr", "setattr", "globals", "locals", "vars", "print", "FunctionTransformer"}):
             raise ValueError(f"Unsupported name: {node.id}")
         if isinstance(node, ast.Call):

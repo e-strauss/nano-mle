@@ -93,10 +93,17 @@ def evaluate_outputs(plans, directory, phases, prefix=""):
 
 
 def prediction_of(estimator, X):
-    """Positive-class probability, else decision function, else plain prediction."""
+    """Positive-class probability, else decision function, else plain prediction.
+
+    Multi-output classifiers return one probability array per output; each output
+    contributes its positive-class column.
+    """
     if hasattr(estimator, "predict_proba"):
-        proba = np.asarray(estimator.predict_proba(X))
-        return proba[:, 1] if proba.ndim == 2 and proba.shape[1] == 2 else proba.tolist()
+        proba = estimator.predict_proba(X)
+        if isinstance(proba, list):
+            return np.column_stack([np.asarray(p)[:, -1] for p in proba])
+        proba = np.asarray(proba)
+        return proba[:, 1] if proba.ndim == 2 and proba.shape[1] == 2 else proba
     if hasattr(estimator, "decision_function"):
         return np.asarray(estimator.decision_function(X))
     return np.asarray(estimator.predict(X))
@@ -134,8 +141,10 @@ def probe(result, contract, request, directory, phases, started):
     if len(captured) != len(frozen):
         raise ValueError(f"Expected {len(frozen)} scored folds, captured {len(captured)}")
     with phases("write_predictions"):
-        table = pd.concat([pd.DataFrame({"row": c["row"], "fold": c["fold"], "y": c["y"],
-                                         "prediction": c["prediction"]}) for c in captured])
+        # Multi-output labels and predictions are stored as one list per row.
+        cell = lambda a: list(a) if np.ndim(a) > 1 else a
+        table = pd.concat([pd.DataFrame({"row": c["row"], "fold": c["fold"], "y": cell(c["y"]),
+                                         "prediction": cell(c["prediction"])}) for c in captured])
         table = table.sort_values("row").reset_index(drop=True)
         if result.get("row_keys") is not None:
             with skrub.config_context(eager_data_ops=False):

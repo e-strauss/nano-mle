@@ -118,3 +118,10 @@ def test_local_reader_helpers_are_not_eager_reads():
                   "from pandas import read_csv as rc\ndef build():\n    return rc('t')\n"):
         with pytest.raises(ValueError, match="Record readers"):
             validate_source(eager)
+
+
+def test_getattr_only_with_literal_public_name():
+    validate_source('def build():\n    return getattr(est, "classes_", None)\n')
+    for call in ['getattr(est, name)', 'getattr(est, "__class__")', 'getattr(est, "_private")', 'getattr(est, "fit")']:
+        with pytest.raises(ValueError):
+            validate_source('def build():\n    return ' + call + '\n')

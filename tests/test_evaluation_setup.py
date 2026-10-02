@@ -216,3 +216,35 @@ def build():
     import pytest
     with pytest.raises(ValueError, match='does not match'):
         contract_folds(contract, corrupted)
+
+
+def test_multi_output_labels_lock_and_probe(tmp_path):
+    data = tmp_path / 'multi.csv'
+    pd.DataFrame([{'a': i % 7, 'b': i % 5, 'l1': int(i % 7 > 3), 'l2': int(i % 5 > 1)}
+                  for i in range(60)]).to_csv(data, index=False)
+    source = f'''import pandas as pd
+import skrub
+from sklearn.model_selection import KFold
+
+def build():
+    data = skrub.as_data_op({str(data)!r}).skb.apply_func(pd.read_csv)
+    X = data[['a', 'b']].skb.mark_as_X(cv=KFold(3), split_kwargs={{}})
+    y = data[['l1', 'l2']].skb.mark_as_y()
+    return {{'X': X, 'y': y, 'scoring': 'accuracy'}}
+'''
+    setup = run_plan(tmp_path / 'setup', source, {'kind': 'evaluation'}, 60)
+    assert setup['status'] == 'ok', setup
+    contract = create_contract(setup['snapshot'], evaluation_source(source),
+                               EvaluationSpec(scoring='accuracy', rationale='multi-output'))
+    body = '''
+from sklearn.tree import DecisionTreeClassifier
+def build():
+    setup = build_evaluation()
+    return {'pred': setup['X'].skb.apply(DecisionTreeClassifier(random_state=0), y=setup['y']),
+            'scoring': setup['scoring']}
+'''
+    probed = run_plan(tmp_path / 'probe', contract['setup_source'] + body,
+                      {'kind': 'probe', 'contract': contract, 'folds_path': str(tmp_path / 'setup' / 'folds.npz')}, 60)
+    assert probed['status'] == 'ok', probed
+    oof = pd.read_parquet(probed['probe']['path'])
+    assert len(oof) == 60 and len(oof['y'][0]) == 2 and len(oof['prediction'][0]) == 2
