@@ -1,99 +1,98 @@
 # nano-mle
 
-A small sequential DSPy harness for adaptive data exploration and scored Skrub
-DataOps pipeline search. Both exploration and pipelines are computation graphs;
-generated plans cannot hide feature construction inside UDFs or custom transformers.
+A small, sequential harness for LLM-driven ML experimentation on tabular data.
+A language model proposes data explorations, an evaluation setup and pipeline
+experiments; the harness executes them, enforces budgets, locks the evaluation,
+records every attempt and runs an interchangeable search policy (greedy, MCTS or
+MCGS) over the resulting candidates.
 
-The controller can initiate exploration, and the planner can request it while
-expanding a selected candidate. The harness owns evaluation, execution, budgets,
-history and search statistics. Exploration produces scoped findings, not rewards.
+All model-written code is expressed as [Skrub DataOps](https://skrub-data.org)
+computation graphs: data reads, joins, aggregations, features and estimators are
+recorded graph nodes rather than opaque Python functions. This makes every
+exploration and pipeline inspectable and comparable, and keeps the evaluation
+boundary checkable.
 
-## Offline prototype
+## Quick start
 
 ```bash
 uv sync
-uv run nano-mle demo /tmp/nano-mle-demo
+uv run pytest                                  # offline test suite
+uv run nano-mle demo /tmp/nano-mle-demo        # deterministic run, no API calls
 uv run nano-mle show /tmp/nano-mle-demo/workspace
-uv run pytest
 ```
 
-The deterministic demo makes **no API calls**. It explores a synthetic dataset,
-locks CV/scoring, evaluates a baseline, runs a planner-requested investigation,
-and evaluates a two-variant grid. Each grid variant becomes a sibling candidate.
-Use a fresh demo directory for each run.
+The demo uses a scripted backend on a synthetic regression table. It walks the
+full loop: exploration, evaluation setup, a baseline, a planner-requested
+exploration and a two-variant grid.
 
-Live runs are explicit: `nano-mle run WORKSPACE --model MODEL`. Model credentials
-are loaded from `.env` only by that backend. Never commit credentials.
+## Running a task
 
-## Task and workspace
+1. **Describe the task** in a JSON file. Paths are relative to the file, or remote
+   URIs such as `gs://bucket/table/`:
 
-Task JSON supplies source-location hints and a description of the prediction setting.
-`train_source`, `target`, and `drop_columns` are optional planning hints; the writer
-constructs the actual modelling population and labels. Sources may be local paths
-or remote URIs such as `gs://bucket/table.parquet`:
+   ```json
+   {
+     "description": "Predict … Explain the entities, prediction setting, metric and data here.",
+     "sources": {"train": "train.csv", "metadata": "metadata.csv"},
+     "train_source": "train",
+     "target": "target",
+     "drop_columns": ["id"]
+   }
+   ```
 
-```json
-{
-  "description": "Predict target; evaluate RMSE. Explain the row population and prediction setting here.",
-  "sources": {"train": "train.csv", "metadata": "metadata.csv"},
-  "train_source": "train",
-  "target": "target",
-  "drop_columns": ["id"]
-}
-```
+   Only `description` and `sources` are required. `train_source`, `target` and
+   `drop_columns` are hints; the model constructs the actual modelling population
+   and labels.
 
-Paths are relative to the task JSON. Initialize without making any model calls:
+2. **Configure credentials** in the repository `.env` (gitignored), for example
+   `OPENAI_API_KEY=…`, `GEMINI_API_KEY=…`, and
+   `GOOGLE_APPLICATION_CREDENTIALS=/path/key.json` for `gs://` sources. The model
+   backend loads it when a run starts; workers inherit the environment.
 
-```bash
-uv run nano-mle init workspaces/example --task task.json --policy greedy \
-  --max-expansions 3 --max-explorations 5 --max-evaluations 10 --max-repairs 1 \
-  --max-model-calls 20
-```
+3. **Initialise a workspace** (no model calls) and **run** it:
 
-Review [the prompts](src/nano_mle/prompts.py), task, and budgets before starting a
-live run. For example, the DSPy/LiteLLM model identifier for Gemini is supplied
-as `--model gemini/gemini-3.8-flash`. The prototype does not automatically test
-credentials or start a live model.
+   ```bash
+   uv run nano-mle init workspaces/my-run --task task.json --policy greedy \
+     --max-model-calls 30 --max-expansions 3 --max-explorations 4 \
+     --max-evaluations 8 --max-repairs 2 --execution-timeout 1800
+   uv run nano-mle run workspaces/my-run --model openai/gpt-6.1-sol
+   uv run nano-mle show workspaces/my-run
+   ```
 
-Each backend call has a 6,000 completion-token limit and a 60-second request timeout.
-Provider retries and DSPy's adapter fallback calls are disabled. The workspace's
-model-call limit counts calls before dispatch, including failures. This bounds
-call volume, not total dollar cost; input size and provider pricing still matter.
-For OpenAI GPT-6 models, the backend uses low reasoning effort, omits a custom
-temperature, and includes reasoning tokens in the completion cap. See the
-[GPT-6.1 Sol documentation](https://developers.openai.com/api/docs/models/gpt-6.1-sol).
+   `--model` is any DSPy/LiteLLM model id. `run` also takes `--max-tokens`
+   (completion cap per call including reasoning, default 16,000) and
+   `--request-timeout` (seconds, default 180). Provider retries are disabled.
 
-A live `openai/gpt-6.1-sol` smoke test on 120 synthetic regression rows completed
-with 10 model calls, one exploration, two expansions, four scored candidates and
-no repairs. Three-fold CV RMSE improved from 0.21441 to 0.20773. This verifies the
-live execution path; it is not a benchmark of model quality. Local artifacts are
-under `workspaces/gpt61-sol-smoke-20261002/` and are excluded from Git.
+A run resumes where it stopped if `run` is invoked again on an interrupted
+workspace; interrupted work stays recorded and is not replayed. A completed
+workspace is immutable; use a new one for new budgets or evaluation rules.
 
-A second Sol smoke test exercised agent-authored evaluation on the same data.
-It exposed and fixed an exporter collision when setup code already defined a
-`build_evaluation` helper. The original run is preserved; a corrected checkpoint
-was reaudited to confirm identical X/y graphs and fold memberships before continuing.
-Across both stages it used 11 model calls, one exploration, one setup with one model
-repair, and one scored three-variant Ridge grid. Best RMSE was 0.20796 versus 0.21592
-for the alpha=1 baseline. Artifacts are under
-`workspaces/sol-graph-lock-smoke-20261002/`, including `run-summary.json`.
+## How a run works
 
-The workspace contains `state.db` (authoritative journal), `workspace.json`
-(exported evaluation contract), `graph.json`, `report.md`, and `artifacts/`.
-Artifacts preserve model inputs/outputs, generated source, repair attempts,
-execution logs, DataOps graph JSON (operations, arguments and dependencies), step
-descriptions and exploration results.
-Completed workspaces are immutable runs; use a new workspace for new budgets or
-evaluation rules. Interrupted runs can resume; interrupted work remains recorded
-and is not silently replayed.
+A single controller loop chooses one action at a time:
 
-## Plan interface
+| Action | What happens | Scored? |
+|---|---|---|
+| `explore` | The writer produces a graph answering a concrete question; outputs are evaluated and an interpreter turns them into scoped findings. | No |
+| `establish_evaluation` | The writer constructs the modelling population, raw labels, CV and scorer. The harness audits and locks them. | No |
+| `expand` | The search policy selects a parent; the planner proposes a bounded change (or requests an exploration first); the writer implements it; every grid variant is scored. | Yes |
+| `stop` | Ends the run. | |
 
-Plans contain imports, optional graph-building helpers and one zero-argument
-`build()` function. No `common.py`, fixed reader adapter or `load_xy()` is required.
-The harness disables eager previews and evaluates returned DataOps.
+Every implementation runs in a time-bounded subprocess. If it fails, the repairer
+gets the source and traceback and may fix it, up to `--max-repairs` times. A
+repair must keep the planned experiment; a different hypothesis needs a new proposal.
 
-Exploration uses recorded readers and fine-grained operations:
+Budgets cover controller actions, model calls (counted before dispatch, including
+failures), explorations, setup attempts, expansions, scored variants, repairs and
+execution time. They bound call volume, not dollar cost.
+
+## Plans
+
+Every plan is standalone Python with imports, optional graph-building helpers and
+one zero-argument `build()`. Graphs are built lazily; the harness evaluates them.
+
+**Exploration** returns named DataOps. They are evaluated together in a single
+graph evaluation, so shared reads and transformations run once:
 
 ```python
 import pandas as pd
@@ -104,9 +103,10 @@ def build():
     return {"missing_counts": data.isna().sum(), "summary": data.describe()}
 ```
 
-After initial exploration, a **special unscored setup phase** constructs the
-population, raw labels and evaluation. Joins, filters, derived labels, reader
-options, custom CV splitters and graph-defined split kwargs are supported:
+**Evaluation setup** marks X and the raw y as soon as population and labels exist,
+attaches an explicit deterministic CV, and names a scikit-learn scorer. It may also
+return `row_keys` (unique, aligned) and `audit` (named DataOps saved as evidence).
+Joins, filters, derived labels, custom splitter classes and split kwargs are allowed:
 
 ```python
 from sklearn.model_selection import KFold
@@ -114,20 +114,14 @@ from sklearn.model_selection import KFold
 def build():
     data = skrub.as_data_op("train.csv").skb.apply_func(pd.read_csv)
     X = data.drop(columns=["target"]).skb.mark_as_X(
-        cv=KFold(3, shuffle=True, random_state=42))
+        cv=KFold(3, shuffle=True, random_state=42), split_kwargs={})
     y = data["target"].skb.mark_as_y()
     return {"X": X, "y": y, "scoring": "neg_root_mean_squared_error"}
 ```
 
-Optional `row_keys` must be unique, nonmissing and aligned with X/y. Optional
-`audit` is a dict of named DataOps whose outputs are saved. The harness checks
-population/label alignment, missing labels and valid nonoverlapping fold positions.
-It locks the logical X/y graphs, CV/split kwargs, scorer, optional row-key graph,
-row count and exact positional fold memberships. CV planning hints do not define
-splits; the recorded setup does.
-
-The writer receives this standalone setup as `locked_evaluation_source`, with
-`build()` renamed to `build_evaluation()`. A subsequent pipeline includes that code:
+**Pipelines** receive the locked setup as source code defining `build_evaluation()`,
+call it, and build features and models downstream. A named `skrub.choose_from` grid
+becomes one candidate per variant:
 
 ```python
 from sklearn.linear_model import Ridge
@@ -140,55 +134,113 @@ def build():
     return {"pred": pred, "scoring": setup["scoring"]}
 ```
 
-If setup declares row keys, return the same row-key DataOp with the prediction.
-Equivalent independently constructed graphs are accepted. Graph fingerprints
-ignore Skrub UUIDs and local variable names; comparison is structural, not a proof
-of semantic equivalence. Downstream features and models may change freely.
-Evaluation drift is warned about before fitting and passed into bounded repair.
-An unresolved drift creates no candidate or search reward. Restore the lock or
-start a fresh workspace; this prototype has one evaluation branch.
+**Plan rules.** These are enforced by a source lint (`plans.py`) and a runtime graph
+check (`graphs.py`):
+- Readers are recorded with `skrub.as_data_op(path).skb.apply_func(pd.read_csv | pd.read_parquet, ...)`.
+- `apply_func` accepts only known library primitives.
+- No UDFs, `deferred`, custom transformers, callable `apply`/`map`, eager reads,
+  materialised data, files, manual fitting or scoring.
+- Imports come from an allowlist: skrub, pandas, numpy and selected sklearn modules.
 
-**Inputs are assumed static/frozen.** Input contents and remote object versions
-are not checked or hashed. Hashes protect generated artifacts and contract metadata.
-All scoring uses the locked folds. Early marking does not prove freedom from
-leakage: side tables and downstream features still need investigation.
+These checks enforce the plan style. They are not a security sandbox or a proof of
+no leakage.
 
-Graph-building helpers and loops are allowed; opaque runtime UDFs, custom
-transformers and callable dataframe callbacks are rejected. Native library
-primitives are documented in [the plan guide](src/nano_mle/plans.py). The harness
-saves graphs and scores for every explicit grid variant and supplies resolved
-parent code to the next writer.
+## Evaluation lock
 
-Legacy `load_xy` workspaces remain readable, but cannot resume under this interface;
-create a new workspace. The historical live smoke run above used the old interface.
+When a setup passes its audit, the harness locks a contract with these parts:
+- the structural fingerprints of the X, y, CV/split-kwargs, scorer and row-key graphs;
+- the row count;
+- the exact positional fold memberships.
 
-## Search experiments
+**Fingerprints.** They ignore Skrub UUIDs and variable names, so an equivalent graph
+constructed independently is accepted. The comparison is structural, not a proof of
+semantic equivalence.
 
-`greedy` selects the best valid candidate. `mcts` uses UCT and progressive widening
-on primary edges. `mcgs` adds an elite-selection schedule and explicit candidate
-references. The latter is MLEvolve-inspired, not a reproduction of all its
-operators and stagnation logic.
+**Checks on every pipeline.** Before fitting, the pipeline's boundary is
+re-fingerprinted and re-evaluated, and the folds are re-derived and compared with
+the lock.
 
-Selection, reference construction, execution and reward updates have separate
-interfaces. Every evaluated grid variant contributes one observation. Reward is
--1 for failure, 1 for a valid non-improvement, and 2 for improvement against the
-global best **before the batch**. References and findings receive no propagated
-reward. Sibling variants share their triggering expansion's selected parent.
+**Drift.** If any part drifts, the attempt is sent back for repair. If the drift is
+not repaired, no candidate or search reward is created. A run has exactly one
+evaluation setup; a different one needs a new workspace.
 
-Debugging is bounded inside construction of an experiment. Attempts preserve their
-source and errors; changing the experimental hypothesis requires a new proposal.
+**Inputs are assumed frozen.** Source contents and remote object versions are not
+hashed. Hashes protect the generated artifacts and the contract itself.
 
-## Prototype boundaries
+## Search
 
-- Recorded CSV/Parquet readers support local/remote paths when the relevant pandas
-  engines/filesystem dependencies and credentials are installed. Remote GCS access
-  has not been tested here. Arbitrary shell/GCS discovery commands, custom scorers,
-  plots and final submission/refitting are outside this prototype.
-- No intermediate reuse, execution rewrites or caching layer. Graphs remain the
-  deliverable for a future execution engine.
-- Source lint and runtime graph checks enforce the supported plan style. They
-  are not a security sandbox or proof of no leakage; use trusted model-generated
-  code and inspect findings and plans. Side tables still require provenance audits.
-- Workers are subprocesses with timeouts; the runner and grid execution are sequential.
-- Private Skrub graph inspection is isolated in `graphs.py` and `worker.py`, alongside
-  public textual graph exports. Dependencies are pinned in `uv.lock`.
+Candidates are search nodes; explorations and findings are evidence and carry no reward.
+
+**Policies.**
+- `greedy` expands the best valid candidate.
+- `mcts` uses UCT with progressive widening.
+- `mcgs` adds an elite-selection schedule and passes cross-branch candidates to the
+  planner as references.
+
+`mcgs` is inspired by [MLEvolve](https://arxiv.org/html/2606.06473); it does not
+reproduce its full operator set.
+
+**Rewards.** Every scored variant is one observation:
+- −1 for a failure;
+- +1 for a valid non-improvement;
+- +2 for an improvement over the best score before the batch.
+
+The reward is backpropagated along the parent chain. Variants of one grid are
+siblings under the same parent.
+
+## Workspace
+
+```
+state.db         authoritative journal: metadata, records and events (SQLite)
+workspace.json   task, sources, budget, policy, model, state and evaluation contract
+graph.json       candidates with parent, reference and evidence edges, search statistics
+report.md        leaderboard, evaluation audit, drift warnings and findings
+artifacts/
+  calls/                         every model call's inputs and outputs
+  <exploration|setup|expansion>_<id>/<attempt>/
+    plan.py, request.json, response.json, execution.log
+    *.graph.json, *.steps.txt    DataOps graphs (nodes, arguments, dependencies)
+    *.csv / *.npy                full exploration and audit outputs
+    timings.json                 per-phase time breakdown, updated while running
+```
+
+**`timings.json` phases.** It records imports, request loading, contract
+verification, lazy graph building, boundary fingerprinting, X/y evaluation and
+checks, graph export, learner/grid construction and grid search. The grid search is
+split into fold fitting, fold scoring and search overhead. A worker that times out
+still shows which phase was running.
+
+## Code map
+
+| File | Role |
+|---|---|
+| `cli.py` | Entry point: `init`, `run`, `show`, `demo`. |
+| `runner.py` | Controller loop, budgets, repair loop, exploration/setup/expansion, report export, resume. |
+| `agents.py` | DSPy backend: controller, planner, writer, repairer and interpreter signatures. |
+| `prompts.py` | Instructions for the controller, planner and writer. |
+| `plans.py` | Plan guide shown to the writer, source lint, locked-setup export, grid-variant resolution. |
+| `models.py` | Pydantic types: task, decisions, proposals, findings, budget. |
+| `execution.py` | Runs one plan in a killable subprocess with a timeout. |
+| `worker.py` | Subprocess body: builds the graph, evaluates outputs, audits the boundary, runs the grid search, records timings. |
+| `evaluation.py` | Evaluation-boundary audit: X/y/CV/row-key checks, folds, drift detection. |
+| `graphs.py` | Runtime graph rules and structural fingerprints (the only private-Skrub-API use besides the graph export). |
+| `contracts.py` | Contract creation, hashing and drift comparison. |
+| `search.py` | Greedy, MCTS and MCGS policies and reward updates. |
+| `store.py` | SQLite journal. |
+| `timing.py` | Phase timer for workers. |
+| `demo.py` | Scripted offline backend. |
+
+`dashboard/` is an optional, harness-agnostic web UI for browsing runs, search trees
+and launching new runs (see its README). `FUTURE_IDEAS.md` collects design notes that
+are not implemented, such as multiple evaluation branches.
+
+## Limitations
+
+- **Execution:** sequential throughout, with one evaluation setup per workspace.
+  There is no intermediate caching: shared reads are recomputed across attempts,
+  and inside the grid search for every fold.
+- **Data access:** only CSV and Parquet readers are supported; local and `gs://`
+  paths work with the installed `gcsfs`/`pyarrow`. Shell access, custom scorers,
+  plots, and final refitting or submission files are out of scope.
+- **Trust:** generated code is trusted. Workers are timeout-bounded subprocesses,
+  not a sandbox.
