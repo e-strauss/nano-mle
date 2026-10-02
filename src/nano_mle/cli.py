@@ -58,6 +58,8 @@ def main():
     run.add_argument("--model", required=True, help="DSPy/LiteLLM model ID, e.g. gemini/gemini-3.8-flash")
     run.add_argument("--max-tokens", type=int, default=16000, help="Completion-token cap per call, incl. reasoning")
     run.add_argument("--request-timeout", type=int, default=180, help="Seconds per model request")
+    draw = sub.add_parser("draw", help="Print an attempt's Skrub DataOps graph as SVG (lazy; reads no data)")
+    draw.add_argument("attempt", type=Path, help="Attempt directory containing plan.py and request.json")
     show = sub.add_parser("show", help="Read the exported experiment report")
     show.add_argument("workspace", type=Path)
     demo = sub.add_parser("demo", help="Offline deterministic demonstration; no API calls")
@@ -80,6 +82,10 @@ def main():
         from .runner import Runner
 
         Runner(args.workspace, DSPyBackend(args.model, args.max_tokens, args.request_timeout)).run()
+    elif args.command == "draw":
+        from .draw import main as draw_main
+
+        draw_main(args.attempt)
     elif args.command == "show":
         print((args.workspace / "report.md").read_text())
     else:

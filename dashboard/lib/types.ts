@@ -51,6 +51,7 @@ export type Section =
   | { title: string; kind: "json"; content: unknown }
   | { title: string; kind: "kv"; content: [string, string][] }
   | { title: string; kind: "files"; content: FileRef[] }
+  | { title: string; kind: "graph"; content: string }   // attempt dir, relative to the run; drawn on demand
   | { title: string; kind: "group"; content: Section[] };
 
 export type ScorePoint = { node: string; order: number; score: number | null; label: string };

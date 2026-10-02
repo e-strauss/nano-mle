@@ -4,6 +4,7 @@ import { useState } from "react";
 import { getFile } from "@/app/actions/runs";
 import { bytes } from "@/lib/format";
 import type { FileRef, Section } from "@/lib/types";
+import GraphViewer from "./graph-viewer";
 
 function Files({ runId, files }: { runId: string; files: FileRef[] }) {
   const [open, setOpen] = useState<{ path: string; text: string } | null>(null);
@@ -46,6 +47,7 @@ export function SectionView({ s, runId, depth = 0 }: { s: Section; runId: string
         </tbody></table>
       );
       case "files": return <Files runId={runId} files={s.content} />;
+      case "graph": return <GraphViewer runId={runId} attempt={s.content} />;
       case "group": return s.content.map((c, i) => <SectionView key={i} s={c} runId={runId} depth={depth + 1} />);
     }
   })();

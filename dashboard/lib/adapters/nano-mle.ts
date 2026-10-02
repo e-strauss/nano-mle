@@ -250,6 +250,15 @@ function timingSection(response: Rec | undefined, live: Rec | undefined, written
   return { title: "time breakdown", kind: "kv", content: rows };
 }
 
+// Top-level drawing for a node: its last successful attempt, else its last one.
+function graphSection(ws: Workspace, ids: string[]): Section[] {
+  const attempts = ids.map((id) => ws.byId.get(id)).filter(Boolean) as Rec[];
+  const pick = [...attempts].reverse().find((a) => a.status === "ok") ?? attempts.at(-1);
+  if (!pick || !existsSync(path.join(ws.dir, pick.path, "plan.py"))) return [];
+  return [{ title: `Skrub DataOps graph (attempt ${pick.repair_number ?? 0}, ${pick.status})`, kind: "graph",
+    content: pick.path }];
+}
+
 function attemptSections(ws: Workspace, ids: string[]): Section[] {
   return ids.map((id) => {
     const a = ws.byId.get(id);
@@ -270,7 +279,10 @@ function attemptSections(ws: Workspace, ids: string[]): Section[] {
     if (timing) inner.push(timing);
     if (response?.error) inner.push({ title: "error", kind: "code", content: response.traceback ?? response.error });
     const plan = readText(path.join(dir, "plan.py"));
-    if (plan) inner.push({ title: "plan.py", kind: "code", content: plan, lang: "python" });
+    if (plan) {
+      inner.push({ title: "Skrub DataOps graph", kind: "graph", content: a.path });
+      inner.push({ title: "plan.py", kind: "code", content: plan, lang: "python" });
+    }
     inner.push({ title: "files", kind: "files", content: listFiles(dir, ws.dir) });
     return { title: `attempt ${a.repair_number ?? ""} · ${a.status}`, kind: "group", content: inner } as Section;
   });
@@ -310,6 +322,7 @@ function nodeSections(ws: Workspace, nodeId: string): Section[] {
       out.push({ title: "configuration", kind: "json", content: rec.configuration_description });
     }
     if (expansion.proposal) out.push({ title: "proposal", kind: "json", content: expansion.proposal });
+    out.push(...graphSection(ws, expansion.attempt_ids ?? []));
     out.push(...findingSections(ws, rec.finding_ids ?? [], "findings available to the planner"));
     out.push({ title: "attempts (repair chain)", kind: "group", content: attemptSections(ws, expansion.attempt_ids ?? []) });
     return out;
@@ -322,6 +335,7 @@ function nodeSections(ws: Workspace, nodeId: string): Section[] {
     ] }];
     const findings = ws.of("finding").filter((f) => f.exploration_id === nodeId).map((f) => f.id);
     out.push(...findingSections(ws, findings, "findings"));
+    out.push(...graphSection(ws, rec.attempt_ids ?? []));
     const outputs = rec.result?.outputs as Record<string, Rec> | undefined;
     if (outputs) {
       out.push({ title: "outputs", kind: "group", content: Object.entries(outputs).map(([k, v]) => ({
@@ -333,7 +347,8 @@ function nodeSections(ws: Workspace, nodeId: string): Section[] {
   }
   if (nodeId.startsWith("setup_")) {
     const out: Section[] = [{ title: "setup", kind: "kv", content: [["status", fmt(rec.status)]] },
-      { title: "spec (controller proposal)", kind: "json", content: rec.spec }];
+      { title: "spec (controller proposal)", kind: "json", content: rec.spec },
+      ...graphSection(ws, rec.attempt_ids ?? [])];
     if (rec.result?.outputs) {
       out.push({ title: "audit outputs", kind: "group", content: Object.entries(rec.result.outputs as Record<string, Rec>)
         .map(([k, v]) => ({ title: k, kind: "code", content: String(v.preview ?? "") })) });
@@ -346,6 +361,7 @@ function nodeSections(ws: Workspace, nodeId: string): Section[] {
     ["status", fmt(rec.status)], ["parent", fmt(rec.parent_id)], ["error", fmt(rec.error ?? rec.result?.error)],
   ] }];
   if (rec.proposal) out.push({ title: "proposal", kind: "json", content: rec.proposal });
+  out.push(...graphSection(ws, rec.attempt_ids ?? []));
   out.push({ title: "attempts", kind: "group", content: attemptSections(ws, rec.attempt_ids ?? []) });
   return out;
 }

@@ -58,3 +58,30 @@ def test_boundary_audit_evaluates_sources_once(tmp_path, monkeypatch):
         y = data["target"].skb.mark_as_y()
         evaluation.audit_boundary({"X": X, "y": y, "scoring": "neg_mean_absolute_error"})
     assert reads == ["t.csv"]
+
+
+def test_draw_rebuilds_pipeline_graph_without_reading_data(tmp_path):
+    import shutil
+
+    import pytest
+    from nano_mle.draw import draw_svg
+
+    if shutil.which("dot") is None:
+        pytest.skip("graphviz not installed")
+    attempt = tmp_path / "attempt"
+    attempt.mkdir()
+    (attempt / "request.json").write_text(json.dumps({"kind": "pipeline"}))
+    missing = tmp_path / "never-read.csv"  # does not exist: drawing must not read it
+    (attempt / "plan.py").write_text(f'''import pandas as pd
+import skrub
+from sklearn.linear_model import Ridge
+from sklearn.model_selection import KFold
+
+def build():
+    data = skrub.as_data_op({str(missing)!r}).skb.apply_func(pd.read_csv)
+    X = data.drop(columns=["y"]).skb.mark_as_X(cv=KFold(2), split_kwargs={{}})
+    y = data["y"].skb.mark_as_y()
+    return {{"pred": X.skb.apply(Ridge(), y=y), "scoring": "r2"}}
+''')
+    svg = draw_svg(attempt)
+    assert b"<svg" in svg and b"Ridge" in svg

@@ -127,3 +127,7 @@ details details { margin-left: 10px; }
 .login-form { display: flex; flex-direction: column; gap: 10px; }
 .login-form label { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
 .tree-wrap text { paint-order: stroke; stroke: var(--chart-surface); stroke-width: 4px; stroke-linejoin: round; }
+
+.graph-pane { overflow: auto; max-height: 70vh; border: 1px solid var(--border); border-radius: 6px;
+  background: #ffffff; }   /* graphviz output is drawn for a light background */
+.graph-pane img { display: block; max-width: none; }

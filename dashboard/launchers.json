@@ -2,6 +2,18 @@
   "runsRoots": [
     "../workspaces"
   ],
+  "harnesses": {
+    "nano-mle": {
+      "cwd": "..",
+      "draw": [
+        "uv",
+        "run",
+        "nano-mle",
+        "draw",
+        "{attempt}"
+      ]
+    }
+  },
   "launchers": [
     {
       "id": "nano-mle",

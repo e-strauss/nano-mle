@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { verifySession } from "@/lib/dal";
+import { drawAttempt } from "@/lib/draw";
 import { launchLog, listLaunches, startLaunch } from "@/lib/launch";
 import { pidAlive } from "@/lib/procs";
 import { nodeDetail, readRunFile, runDetail } from "@/lib/runs";
@@ -15,6 +16,15 @@ export async function getNode(runId: string, nodeId: string): Promise<Section[]>
 export async function getFile(runId: string, rel: string): Promise<{ text: string; truncated: boolean }> {
   await verifySession();
   return readRunFile(runId, rel);
+}
+
+export async function drawGraph(runId: string, attemptRel: string): Promise<{ svg?: string; error?: string }> {
+  await verifySession();
+  try {
+    return { svg: await drawAttempt(runId, attemptRel) };
+  } catch (error) {
+    return { error: (error as Error).message };
+  }
 }
 
 export async function getLaunchLog(id: string): Promise<string> {

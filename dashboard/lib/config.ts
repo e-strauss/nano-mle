@@ -25,8 +25,12 @@ export type Launcher = {
   env?: Record<string, string>;
 };
 
+// Optional per-adapter commands, e.g. drawing an attempt's graph on demand.
+export type Harness = { cwd: string; draw?: string[] };
+
 export type Config = {
   runsRoots: string[];
+  harnesses: Record<string, Harness>;
   launchers: Launcher[];
 };
 
@@ -43,10 +47,13 @@ export function loadConfig(): Config {
   const ids = new Set((local.launchers ?? []).map((l) => l.id));
   const merged = {
     runsRoots: local.runsRoots ?? base.runsRoots ?? [],
+    harnesses: { ...(base.harnesses ?? {}), ...(local.harnesses ?? {}) },
     launchers: [...(base.launchers ?? []).filter((l) => !ids.has(l.id)), ...(local.launchers ?? [])],
   };
   return {
     runsRoots: merged.runsRoots.map((r) => path.resolve(DASHBOARD_DIR, r)),
+    harnesses: Object.fromEntries(Object.entries(merged.harnesses)
+      .map(([k, h]) => [k, { ...h, cwd: path.resolve(DASHBOARD_DIR, h.cwd) }])),
     launchers: merged.launchers.map((l) => ({
       ...l,
       cwd: path.resolve(DASHBOARD_DIR, l.cwd),
