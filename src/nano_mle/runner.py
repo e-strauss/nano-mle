@@ -157,7 +157,7 @@ class Runner:
             raise ValueError("Historical candidate source was modified")
         return {**candidate, "resolved_source": resolve_source(path.read_text(), candidate["configuration"])}
 
-    def call(self, method, **kwargs):
+    def call(self, method, retry=False, **kwargs):
         if self.counts()["model_calls"] >= self.budget.max_model_calls:
             raise ModelCallBudgetExceeded("Model-call budget exhausted")
         call_id = new_id("call")
@@ -167,7 +167,18 @@ class Runner:
         (directory / f"{call_id}.input.json").write_text(json.dumps(request, indent=2))
         self.store.put("model_call", {"id": call_id, "method": method, "status": "started"})
         self.store.event("model_call_started", id=call_id, method=method)
-        result = getattr(self.backend, method)(**kwargs)
+        try:
+            result = getattr(self.backend, method)(**kwargs)
+        except Exception as error:
+            # A malformed structured answer (e.g. a probe without a question) must not end
+            # the run: record it and ask again once, showing the model its own error.
+            self.store.put("model_call", {"id": call_id, "method": method, "status": "failed",
+                                          "error": " ".join(str(error).split())[:2000]})
+            self.store.event("model_call_failed", id=call_id, method=method)
+            if retry or not isinstance(kwargs.get("context"), dict):
+                raise
+            context = {**kwargs["context"], "previous_answer_error": " ".join(str(error).split())[-2000:]}
+            return self.call(method, retry=True, **{**kwargs, "context": context})
         encoded = (result.model_dump() if hasattr(result, "model_dump") else
                    [f.model_dump() for f in result] if isinstance(result, list) else result)
         (directory / f"{call_id}.output.json").write_text(json.dumps(encoded, indent=2))
