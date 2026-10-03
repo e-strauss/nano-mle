@@ -62,7 +62,8 @@ Skrub and library notes (exact signatures; do not guess other keywords):
 - a.skb.concat([b, c], axis=0) takes only a list and axis; no ignore_index. It works on
   DataFrames, not Series: concatenate df[['col']] rather than df['col'].
   Chain .reset_index(drop=True) afterwards if a fresh index is needed.
-- skrub.choose_from(...) returns a Choice, not a DataOp: pass it as an argument (an
+- skrub.choose_from(outcomes, name='...'): outcomes (list or dict) first, name as a
+  keyword. It returns a Choice, not a DataOp: pass it as an argument (an
   estimator, a column list, a parameter) or wrap it with skrub.as_data_op(choice)
   before using .skb or DataFrame methods on it.
 - X.skb.apply(estimator, y=y) for the final model; there is no method= argument.
@@ -215,7 +216,9 @@ def validate_source(source):
                 names = [k.value for k in node.keywords if k.arg == "name"]
                 if (len(names) != 1 or not isinstance(names[0], ast.Constant)
                         or not isinstance(names[0].value, str) or not names[0].value):
-                    raise ValueError("Every choose_from needs a literal nonempty name")
+                    raise ValueError("Every choose_from needs a literal nonempty name, passed as a keyword: "
+                                     "skrub.choose_from(outcomes, name='...') with the outcomes (list or "
+                                     "dict) first; the name is not positional")
                 if names[0].value in choice_names:
                     raise ValueError("Choice names must be unique")
                 choice_names.add(names[0].value)
