@@ -69,6 +69,9 @@ Skrub and library notes (exact signatures; do not guess other keywords):
   keyword. It returns a Choice, not a DataOp: pass it as an argument (an
   estimator, a column list, a parameter) or wrap it with skrub.as_data_op(choice)
   before using .skb or DataFrame methods on it.
+  Candidates are labelled by their outcomes: choose between estimators or settings
+  with a dict whose keys name them ({'lr0.03_750trees': est_a, ...}), or put the
+  choice on the parameter itself; a list of estimators shows only 'Classifier(...)'.
 - X.skb.apply(estimator, y=y) for the final model; there is no method= argument.
   Scorers call predict_proba/decision_function on the learner themselves.
 - skrub.TableVectorizer(cardinality_threshold=40, low_cardinality=..., high_cardinality=...,

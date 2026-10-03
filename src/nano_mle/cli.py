@@ -44,7 +44,7 @@ def main():
     run = sub.add_parser("run", help="Run/resume a workspace using the explicitly supplied model (API calls)")
     run.add_argument("workspace", type=Path)
     run.add_argument("--model", required=True, help="DSPy/LiteLLM model ID, e.g. gemini/gemini-3.8-flash")
-    run.add_argument("--max-tokens", type=int, default=16000, help="Completion-token cap per call, incl. reasoning")
+    run.add_argument("--max-tokens", type=int, default=64000, help="Completion-token cap per call, incl. reasoning")
     run.add_argument("--request-timeout", type=int, default=180, help="Seconds per model request")
     run.add_argument("--reasoning-effort", choices=["low", "medium", "high"],
                      help="Provider reasoning effort (default: low for GPT-6, provider default otherwise)")
@@ -55,7 +55,7 @@ def main():
     final.add_argument("--task", type=Path, help="Updated task file, e.g. adding test rows and the sample submission")
     final.add_argument("--max-repairs", type=int, default=2)
     final.add_argument("--timeout", type=int, default=7200, help="Seconds for fitting and predicting")
-    final.add_argument("--max-tokens", type=int, default=16000)
+    final.add_argument("--max-tokens", type=int, default=64000)
     final.add_argument("--request-timeout", type=int, default=180)
     final.add_argument("--reasoning-effort", choices=["low", "medium", "high"],
                      help="Provider reasoning effort (default: low for GPT-6, provider default otherwise)")

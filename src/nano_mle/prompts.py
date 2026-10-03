@@ -67,7 +67,8 @@ A repair fixes the planned experiment; a different hypothesis needs a new propos
 
 CONTROL_INSTRUCTIONS = GOAL + ("Working convention:\n" + DATA_VOLUME_STUDY
                                if load_config()["prompts"]["data_volume_study"] else "") + """
-Choose the next action. Explore with a concrete question and an observable stopping
+Choose the next action. Score differences smaller than the fold-score spread are
+ties, not trends: do not extrapolate a direction from them. Explore with a concrete question and an observable stopping
 condition whenever evidence is missing: before the evaluation setup, and later
 whenever results are unclear or progress stalls. Propose establish_evaluation once
 the population, labels, CV and metric are understood; it is locked afterwards.

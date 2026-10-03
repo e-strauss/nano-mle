@@ -29,7 +29,7 @@ class Backend(Protocol):
 
 
 class DSPyBackend:
-    def __init__(self, model: str, max_tokens=16000, timeout=180, reasoning_effort=None):
+    def __init__(self, model: str, max_tokens=64000, timeout=180, reasoning_effort=None):
         import os
         import dspy
         from dotenv import load_dotenv
