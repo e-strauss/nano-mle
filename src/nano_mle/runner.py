@@ -304,7 +304,7 @@ class Runner:
         self.notify(f"Locked {locked}: {contract['rows']} rows")
         export_workspace(self.store)
 
-    def expand(self):
+    def expand(self, direction=None):
         contract = self.store.meta("contract")
         if contract is None:
             raise ValueError("Establish evaluation before expanding")
@@ -316,12 +316,15 @@ class Runner:
         selection = self.policy.select(old_candidates, self.store.meta("search_stats"), counts["expansions"])
         record = {"id": new_id("expansion"), "parent_id": selection.parent_id,
                   "reference_ids": selection.reference_ids, "status": "running", "attempt_ids": [],
-                  "exploration_ids": []}
+                  "exploration_ids": [], "direction": direction}
         self.store.put("expansion", record)
         self.notify(f"Expand {selection.parent_id} ({self.policy.name})")
         requested = 0
         while True:
             context = self.context(selection, requested)
+            # The controller's reason for expanding is the requested direction; the
+            # planner grounds the concrete experiment in it and the selected parent.
+            context["controller_direction"] = direction
             proposal = self.call("plan", context=context)
             if proposal.action == "experiment":
                 break
@@ -427,7 +430,7 @@ class Runner:
                         elif decision.action == "probe":
                             self.probe(decision)
                         else:
-                            self.expand()
+                            self.expand(decision.reason)
                     except ValueError as error:
                         self.fail_active(str(error))
                         self.store.event("action_rejected", error=str(error))

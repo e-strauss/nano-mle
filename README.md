@@ -114,7 +114,7 @@ Who decides what, compared with a single-agent harness such as mle-claude:
 |---|---|---|
 | Next action (explore, lock evaluation, expand, probe, stop) | LLM | LLM controller |
 | Which candidate to build on | LLM | search policy (greedy / MCTS / MCGS) |
-| What to change in the experiment | LLM | LLM planner, given the selected node |
+| What to change in the experiment | LLM | LLM planner, given the selected node and the controller's reason for expanding |
 | Writing and fixing code | LLM | LLM writer / repairer |
 | Turning outputs into findings | LLM | LLM interpreter |
 | Scoring and the evaluation lock | harness | harness |

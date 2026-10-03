@@ -252,3 +252,28 @@ def test_probe_reports_evidence_but_its_files_are_not_inputs(workspace):
     assert store.meta("budget")["max_probes"] == 4
     assert all(c["status"] == "ok" for c in store.records("candidate"))
     assert len(store.records("candidate")) == 1  # probes create no candidates
+
+
+class DirectionBackend(DemoBackend):
+    """Records what the planner is told about the controller's reason to expand."""
+
+    def __init__(self):
+        self.directions = []
+
+    def control(self, context):
+        decision = super().control(context)
+        if decision.action == "expand":
+            decision = decision.model_copy(update={"reason": "Measure a learning curve before tuning"})
+        return decision
+
+    def plan(self, context):
+        self.directions.append(context.get("controller_direction"))
+        return super().plan(context)
+
+
+def test_planner_receives_the_controller_direction(workspace):
+    backend = DirectionBackend()
+    Runner(workspace, backend).run()
+    assert backend.directions and set(backend.directions) == {"Measure a learning curve before tuning"}
+    expansions = Store(workspace).records("expansion")
+    assert all(e["direction"] == "Measure a learning curve before tuning" for e in expansions)

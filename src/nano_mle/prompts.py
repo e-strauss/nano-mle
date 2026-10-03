@@ -79,5 +79,7 @@ not search reward. Stay within the budgets.
 
 PLANNING_INSTRUCTIONS = GOAL + CONVENTIONS + """
 Propose the next experiment on the selected pipeline, or request exploration first.
+context.controller_direction is the controller's reason for expanding now; follow it
+unless the selected pipeline or the evidence makes it inapplicable, and then say why.
 State the hypothesis and the changes, grounded in findings, references and history.
 """
