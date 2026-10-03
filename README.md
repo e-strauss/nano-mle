@@ -112,7 +112,7 @@ are stateless calls that see what the harness passes them:
 |---|---|---|
 | Task description and sources | the agent | every role (task and source manifest) |
 | Raw data | read directly, any slice | only through a plan's graph, evaluated by the harness |
-| Exploration results | everything it printed | interpreter sees outputs; other roles see its scoped findings |
+| Exploration results | everything it printed | output previews of the last four explorations, plus the interpreter's scoped findings |
 | Earlier code | any file in the workspace | writer sees the parent's and references' resolved source |
 | Model errors | loads out-of-fold predictions and slices freely | probe fold scores, preview and a harness-computed error summary |
 | Intermediate artifacts | reads its own files (convention: no cached features) | never: plans read task sources only, artifact paths are hidden |
