@@ -128,6 +128,23 @@ are stateless calls that see what the harness passes them:
 | History and reasoning | its own context window | journal summaries: findings, leaderboard, recent failures, trajectory |
 | Run time | sees wall time | attempt wall time, phase timings and per-variant fit times in the records it is shown |
 
+The controller's context is rebuilt from the journal on every call. Most parts are
+windows, so it grows early and then levels off; only findings grow without bound.
+Example: the last control call of a 4 h Gemini forest-cover run, after 9 expansions:
+
+| Part | Size | Bound |
+|---|---|---|
+| Recent explorations (with their output previews) | 20 KB | last 4 |
+| Leaderboard (configurations, fold scores) | 17 KB | top 8 |
+| Task description | 6.5 KB | fixed |
+| Findings | 4 KB | all active (superseded ones dropped) |
+| Probe outputs (summary, preview) | 2.7 KB | probe budget |
+| Locked evaluation source | 1.5 KB | fixed |
+| Next parent, time, budgets, counts, sources | 2.5 KB | fixed |
+
+Over that run the context went 8 KB (first call) → 41 KB (evaluation locked) →
+62 KB (after 3 expansions) → 66 KB (after 9), about 16k tokens.
+
 Every implementation runs in a time-bounded subprocess. If it fails, the repairer
 gets the source and traceback and may fix it, up to `--max-repairs` times. A
 repair must keep the planned experiment; a different hypothesis needs a new proposal.
