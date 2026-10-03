@@ -62,6 +62,9 @@ Skrub and library notes (exact signatures; do not guess other keywords):
 - a.skb.concat([b, c], axis=0) takes only a list and axis; no ignore_index. It works on
   DataFrames, not Series: concatenate df[['col']] rather than df['col'].
   Chain .reset_index(drop=True) afterwards if a fresh index is needed.
+- skrub.choose_from(...) returns a Choice, not a DataOp: pass it as an argument (an
+  estimator, a column list, a parameter) or wrap it with skrub.as_data_op(choice)
+  before using .skb or DataFrame methods on it.
 - X.skb.apply(estimator, y=y) for the final model; there is no method= argument.
   Scorers call predict_proba/decision_function on the learner themselves.
 - skrub.TableVectorizer(cardinality_threshold=40, low_cardinality=..., high_cardinality=...,
