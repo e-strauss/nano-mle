@@ -16,6 +16,7 @@ from .memory import Journal, memory
 from .plans import MissingLibrary, evaluation_source, resolve_source, validate_source
 from .search import policy, update_stats, valid
 from .store import Store, new_id
+from .submit import write_submission
 
 
 class ModelCallBudgetExceeded(RuntimeError):
@@ -452,7 +453,52 @@ class Runner:
                     record.update(status="failed", error=error)
                     self.store.put(kind, record)
 
-    def run(self):
+    def search(self):
+        while self.counts()["actions"] < self.budget.max_actions:
+            if self.counts()["evaluations"] >= self.budget.max_evaluations:
+                self.store.event("stopped", reason="Evaluation budget exhausted")
+                return
+            remaining = self.remaining_seconds()
+            if remaining is not None and remaining <= 0:
+                self.store.event("stopped", reason="Time budget exhausted")
+                return
+            self.store.set_meta("actions", self.counts()["actions"] + 1)
+            decision = self.call("control", context=self.context(
+                "control", extra={"next_expansion_parent": self.next_parent_context()}))
+            self.store.event("controller_decision", **decision.model_dump())
+            if decision.action == "stop":
+                self.store.event("stopped", reason=decision.reason)
+                return
+            try:
+                if decision.action == "explore":
+                    self.explore(decision.question, decision.stopping_condition)
+                elif decision.action == "establish_evaluation":
+                    self.establish(decision.evaluation)
+                elif decision.action == "probe":
+                    self.probe(decision)
+                else:
+                    self.expand(decision.reason)
+            except ValueError as error:
+                self.fail_active(str(error))
+                self.store.event("action_rejected", error=str(error))
+                self.notify(f"Action rejected: {error}")
+
+    def final_submission(self, timeout):
+        """Refit the best candidate and write the submission, once per run. It runs after
+        the search, outside the time and model-call budgets."""
+        if not valid(self.store.records("candidate")):
+            self.notify("No scored candidate; no submission")
+            return
+        if any(r["status"] == "ok" for r in self.store.records("submission")):
+            return
+        try:
+            write_submission(self.workspace, self.store, self.backend, max_repairs=self.budget.max_repairs,
+                             timeout=timeout, notify=self.notify)
+        except Exception as error:  # the search result stands; nano-mle submit can retry
+            self.store.event("submission_failed", error=" ".join(str(error).split())[:2000])
+            self.notify(f"Submission failed: {error}")
+
+    def run(self, submit=False, submit_timeout=7200):
         owns_lock = False
         try:
             with (self.workspace / ".run.lock").open("a") as lock:
@@ -461,55 +507,30 @@ class Runner:
                 except BlockingIOError:
                     raise ValueError("Another runner owns this workspace") from None
                 owns_lock = True
-                if self.store.meta("state") == "complete":
-                    return
-                if self.store.meta("contract"):
-                    verify_contract(self.store.meta("contract"))
-                self.recover()
-                # A resumed run may use a different model; each session is recorded.
-                model = getattr(self.backend, "model", type(self.backend).__name__)
-                self.store.set_meta("model", model)
-                self.store.set_meta("config", load_config())
-                self.store.event("run_started", model=model, config=load_config())
-                self.store.set_meta("state", "running")
-                self.tick()  # time while the run was stopped does not count
-                while self.counts()["actions"] < self.budget.max_actions:
-                    if self.counts()["evaluations"] >= self.budget.max_evaluations:
-                        self.store.event("stopped", reason="Evaluation budget exhausted")
-                        break
-                    remaining = self.remaining_seconds()
-                    if remaining is not None and remaining <= 0:
-                        self.store.event("stopped", reason="Time budget exhausted")
-                        break
-                    self.store.set_meta("actions", self.counts()["actions"] + 1)
-                    decision = self.call("control", context=self.context(
-                        "control", extra={"next_expansion_parent": self.next_parent_context()}))
-                    self.store.event("controller_decision", **decision.model_dump())
-                    if decision.action == "stop":
-                        self.store.event("stopped", reason=decision.reason)
-                        break
+                if self.store.meta("state") != "complete":
+                    if self.store.meta("contract"):
+                        verify_contract(self.store.meta("contract"))
+                    self.recover()
+                    # A resumed run may use a different model; each session is recorded.
+                    model = getattr(self.backend, "model", type(self.backend).__name__)
+                    self.store.set_meta("model", model)
+                    self.store.set_meta("config", load_config())
+                    self.store.event("run_started", model=model, config=load_config())
+                    self.store.set_meta("state", "running")
+                    self.tick()  # time while the run was stopped does not count
                     try:
-                        if decision.action == "explore":
-                            self.explore(decision.question, decision.stopping_condition)
-                        elif decision.action == "establish_evaluation":
-                            self.establish(decision.evaluation)
-                        elif decision.action == "probe":
-                            self.probe(decision)
-                        else:
-                            self.expand(decision.reason)
-                    except ValueError as error:
+                        self.search()
+                    except ModelCallBudgetExceeded as error:
                         self.fail_active(str(error))
-                        self.store.event("action_rejected", error=str(error))
-                        self.notify(f"Action rejected: {error}")
-                self.store.set_meta("state", "complete")
-                export_workspace(self.store)
-        except ModelCallBudgetExceeded as error:
-            self.fail_active(str(error))
-            self.store.event("stopped", reason=str(error))
-            self.store.set_meta("state", "complete")
-            export_workspace(self.store)
+                        self.store.event("stopped", reason=str(error))
+                    self.store.set_meta("state", "complete")
+                    self.tick()
+                    self._clock = None  # the submission does not count toward the run's time
+                    export_workspace(self.store)
+                if submit:
+                    self.final_submission(submit_timeout)
         except BaseException:
-            if owns_lock:
+            if owns_lock and self.store.meta("state") != "complete":
                 self.store.set_meta("state", "interrupted")
                 export_workspace(self.store)
             raise

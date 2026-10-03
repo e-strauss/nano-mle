@@ -47,6 +47,7 @@ def pick_candidate(store, candidate_id=None):
 
 def submit(workspace: Path, backend, candidate_id=None, task: Task | None = None,
            max_repairs=2, timeout=7200, notify=print):
+    """`nano-mle submit`: take the workspace lock, then write the submission."""
     workspace = workspace.resolve()
     if not (workspace / "state.db").exists():
         raise ValueError("Not an initialized workspace")
@@ -56,61 +57,70 @@ def submit(workspace: Path, backend, candidate_id=None, task: Task | None = None
         except BlockingIOError:
             raise ValueError("A runner owns this workspace; submit after it stops") from None
         store = Store(workspace)
-        # An updated task file may add the prediction rows and the submission format.
-        sources = source_manifest(task) if task else store.meta("sources")
-        task = task or Task.model_validate(store.meta("task"))
-        candidate = pick_candidate(store, candidate_id)
-        path = workspace / candidate["source_path"]
-        if digest(path) != candidate["source_sha256"]:
-            raise ValueError("Candidate source was modified")
-        record = {"id": new_id("submission"), "candidate_id": candidate["id"], "score": candidate["score"],
-                  "status": "running", "attempt_ids": []}
-        store.put("submission", record)
-        context = {"task": task.model_dump(), "sources": sources, "source_heads": source_heads(sources),
-                   "candidate": {"id": candidate["id"], "score": candidate["score"],
-                                 "configuration": candidate["configuration"]},
-                   "resolved_source": resolve_source(path.read_text(), candidate["configuration"])}
-        intent = {"goal": "final refit and submission for the candidate's resolved source"}
-        directory = workspace / "submission" / record["id"]
-        directory.mkdir(parents=True)
-        calls = []
+        try:
+            return write_submission(workspace, store, backend, candidate_id, task, max_repairs, timeout, notify)
+        finally:
+            store.close()
 
-        def call(method, **kwargs):
-            source = getattr(backend, method)(**kwargs)
-            (directory / f"{method}_{len(calls)}.json").write_text(
-                json.dumps({"inputs": kwargs, "output": source}, indent=2))
-            calls.append(method)
-            return source
 
-        notify(f"Submission for {candidate['id']} (score {candidate['score']:.5f})")
-        source = call("implement", kind="final", context=context, intent=intent)
-        result = {"status": "failed", "error": "No attempt executed"}
-        for repair_number in range(max_repairs + 1):
-            attempt = directory / new_id("attempt")
-            request = {"kind": "final", "task": task.model_dump(), "sources": sources}
-            try:
-                validate_source(source)
-                result = run_plan(attempt, source, request, timeout)
-            except (SyntaxError, ValueError) as error:
-                attempt.mkdir(parents=True, exist_ok=True)
-                (attempt / "plan.py").write_text(source)
-                result = {"status": "failed", "error": str(error)}
-                (attempt / "response.json").write_text(json.dumps(result))
-            record["attempt_ids"].append(attempt.name)
-            if result["status"] == "ok" or repair_number == max_repairs:
-                break
-            notify(f"  Repair {repair_number + 1}: {' '.join(result['error'].split())[:300]}")
-            source = call("repair", kind="final", context=context, intent=intent, source=source,
-                          error=result["error"])
-        record.update(status=result["status"], result=result,
-                      model_calls=len(calls), path=str(directory.relative_to(workspace)))
-        store.put("submission", record)
-        store.event("submission_finished", id=record["id"], candidate_id=candidate["id"], status=result["status"])
-        if result["status"] == "ok":
-            info = result["submission"]
-            notify(f"Wrote {info['path']} ({info['rows']} rows)")
-            for warning in info["warnings"]:
-                notify(f"  warning: {warning}")
-        else:
-            notify(f"Submission failed: {result['error'][:500]}")
-        return record
+def write_submission(workspace, store, backend, candidate_id=None, task=None, max_repairs=2,
+                     timeout=7200, notify=print):
+    """The caller holds the workspace lock (the runner at the end of a run, or submit)."""
+    # An updated task file may add the prediction rows and the submission format.
+    sources = source_manifest(task) if task else store.meta("sources")
+    task = task or Task.model_validate(store.meta("task"))
+    candidate = pick_candidate(store, candidate_id)
+    path = workspace / candidate["source_path"]
+    if digest(path) != candidate["source_sha256"]:
+        raise ValueError("Candidate source was modified")
+    record = {"id": new_id("submission"), "candidate_id": candidate["id"], "score": candidate["score"],
+              "status": "running", "attempt_ids": []}
+    store.put("submission", record)
+    context = {"task": task.model_dump(), "sources": sources, "source_heads": source_heads(sources),
+               "candidate": {"id": candidate["id"], "score": candidate["score"],
+                             "configuration": candidate["configuration"]},
+               "resolved_source": resolve_source(path.read_text(), candidate["configuration"])}
+    intent = {"goal": "final refit and submission for the candidate's resolved source"}
+    directory = workspace / "submission" / record["id"]
+    directory.mkdir(parents=True)
+    calls = []
+
+    def call(method, **kwargs):
+        source = getattr(backend, method)(**kwargs)
+        (directory / f"{method}_{len(calls)}.json").write_text(
+            json.dumps({"inputs": kwargs, "output": source}, indent=2))
+        calls.append(method)
+        return source
+
+    notify(f"Submission for {candidate['id']} (score {candidate['score']:.5f})")
+    source = call("implement", kind="final", context=context, intent=intent)
+    result = {"status": "failed", "error": "No attempt executed"}
+    for repair_number in range(max_repairs + 1):
+        attempt = directory / new_id("attempt")
+        request = {"kind": "final", "task": task.model_dump(), "sources": sources}
+        try:
+            validate_source(source)
+            result = run_plan(attempt, source, request, timeout)
+        except (SyntaxError, ValueError) as error:
+            attempt.mkdir(parents=True, exist_ok=True)
+            (attempt / "plan.py").write_text(source)
+            result = {"status": "failed", "error": str(error)}
+            (attempt / "response.json").write_text(json.dumps(result))
+        record["attempt_ids"].append(attempt.name)
+        if result["status"] == "ok" or repair_number == max_repairs:
+            break
+        notify(f"  Repair {repair_number + 1}: {' '.join(result['error'].split())[:300]}")
+        source = call("repair", kind="final", context=context, intent=intent, source=source,
+                      error=result["error"])
+    record.update(status=result["status"], result=result,
+                  model_calls=len(calls), path=str(directory.relative_to(workspace)))
+    store.put("submission", record)
+    store.event("submission_finished", id=record["id"], candidate_id=candidate["id"], status=result["status"])
+    if result["status"] == "ok":
+        info = result["submission"]
+        notify(f"Wrote {info['path']} ({info['rows']} rows)")
+        for warning in info["warnings"]:
+            notify(f"  warning: {warning}")
+    else:
+        notify(f"Submission failed: {result['error'][:500]}")
+    return record

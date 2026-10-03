@@ -70,3 +70,54 @@ def test_submit_rejects_prediction_rows_outside_sources(finished, tmp_path):
     backend = FinalBackend(FINAL.format(train=paths["train"], test=str(stray), sample=paths["sample"]))
     record = submit(workspace, backend, task=task, max_repairs=0, notify=lambda *_: None)
     assert record["status"] == "failed" and "not a task source" in record["result"]["error"]
+
+
+class SearchThenFinal(FinalBackend):
+    def implement(self, kind, context, intent):
+        if kind == "final":
+            return super().implement(kind, context, intent)
+        return ScriptedBackend.implement(self, kind, context, intent)
+
+
+@pytest.fixture
+def ready(tmp_path, finished):
+    from nano_mle.models import Budget
+    from nano_mle.runner import initialize
+
+    _, task, paths = finished
+    workspace = tmp_path / "fresh"
+    initialize(workspace, task.model_copy(update={"target": "target"}), Budget(max_expansions=2, max_evaluations=4))
+    return workspace, paths
+
+
+def test_run_ends_with_a_submission_unless_disabled(ready):
+    from nano_mle.runner import Runner
+
+    workspace, paths = ready
+    backend = SearchThenFinal(FINAL.format(**paths))
+    Runner(workspace, backend).run(submit=True)
+    store = Store(workspace)
+    assert store.meta("state") == "complete"
+    assert [r["status"] for r in store.records("submission")] == ["ok"]
+    # Running a completed workspace again does not submit twice.
+    Runner(workspace, backend).run(submit=True)
+    assert len(Store(workspace).records("submission")) == 1
+
+
+def test_failed_submission_leaves_the_run_complete(ready):
+    from nano_mle.runner import Runner
+
+    workspace, paths = ready
+    backend = SearchThenFinal("def build():\n    return {}\n")
+    Runner(workspace, backend).run(submit=True)
+    store = Store(workspace)
+    assert store.meta("state") == "complete"
+    assert store.records("submission")[0]["status"] == "failed"
+
+
+def test_run_without_submit_writes_none(ready):
+    from nano_mle.runner import Runner
+
+    workspace, paths = ready
+    Runner(workspace, SearchThenFinal(FINAL.format(**paths))).run()
+    assert Store(workspace).records("submission") == []

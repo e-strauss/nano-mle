@@ -58,7 +58,9 @@ uv run pytest      # offline test suite
    `--model` is any DSPy/LiteLLM model id. `run` also takes `--max-tokens`
    (completion cap per call including reasoning, default 64,000; with high reasoning
    a lower cap cuts plans off mid-file, which then costs a repair) and
-   `--request-timeout` (seconds, default 180). Provider retries are disabled.
+   `--request-timeout` (seconds, default 180). Provider retries are disabled. The run
+   ends with a [submission](#submission) of the best candidate unless `--no-submit`
+   is given; put the prediction rows and the sample submission in the task's sources.
 
 A run resumes where it stopped if `run` is invoked again on an interrupted
 workspace; interrupted work stays recorded and is not replayed. A completed
@@ -118,9 +120,17 @@ within a time budget, so compare runs only on the same core layout.
 
 ## Submission
 
-`nano-mle submit WORKSPACE --model MODEL [--candidate ID] [--task TASK.json]` runs after
-the search, like mle-claude's ml-submit skill. The harness takes the best candidate
-(or the named one) and resolves its winning grid variant. One writer call (with
+A run ends with a submission, like mle-claude's ml-submit skill: once the search stops
+(by the controller, a budget or the time limit), the runner refits the best candidate
+and writes the prediction file. `run --no-submit` skips it; `--submit-timeout`
+(default 7200 s) bounds its fit and predict. The submission runs outside the time and
+model-call budgets, and a failed submission leaves the run complete. Running a
+completed workspace again submits only if no submission succeeded yet.
+`nano-mle submit WORKSPACE --model MODEL [--candidate ID] [--task TASK.json]` does the
+same on its own, e.g. for another candidate or an updated task file.
+
+The harness takes the best candidate (or the named one) and resolves its winning grid
+variant. One writer call (with
 repairs) re-roots the plan so it can be applied to new rows: rows that differ between
 fitting and predicting are read through `skrub.var` holding a path, bound by the
 plan's `FIT` and `PREDICT` dicts. The harness fits once on `FIT`, predicts on
@@ -403,7 +413,7 @@ still shows which phase was running.
 | `config.py` | Loads `nano-mle.toml` (threads, grid parallelism, plan checks). |
 | `timing.py` | Phase timer for workers. |
 | `libraries.py` | Repository-level record of imported-but-missing libraries. |
-| `submit.py` | `nano-mle submit`: final refit of a candidate, prediction on new rows, format checks. |
+| `submit.py` | Final refit of a candidate, prediction on new rows, format checks; used at the end of a run and by `nano-mle submit`. |
 | `draw.py` | `nano-mle draw ATTEMPT`: rebuilds a recorded plan lazily and prints its Skrub `draw_graph` SVG. |
 
 `dashboard/` is an optional, harness-agnostic web UI for browsing runs, search trees

@@ -50,6 +50,9 @@ def main():
     run.add_argument("--request-timeout", type=int, default=180, help="Seconds per model request")
     run.add_argument("--reasoning-effort", choices=["low", "medium", "high"],
                      help="Provider reasoning effort (default: low for GPT-6, provider default otherwise)")
+    run.add_argument("--no-submit", action="store_true",
+                     help="Skip the final refit and submission of the best candidate after the search")
+    run.add_argument("--submit-timeout", type=int, default=7200, help="Seconds for the final fit and predict")
     final = sub.add_parser("submit", help="Refit the best (or a named) candidate and write a submission")
     final.add_argument("workspace", type=Path)
     final.add_argument("--model", required=True, help="DSPy/LiteLLM model ID for the writer")
@@ -82,7 +85,8 @@ def main():
         from .agents import DSPyBackend
         from .runner import Runner
 
-        Runner(args.workspace, DSPyBackend(args.model, args.max_tokens, args.request_timeout, args.reasoning_effort)).run()
+        Runner(args.workspace, DSPyBackend(args.model, args.max_tokens, args.request_timeout, args.reasoning_effort)).run(
+            submit=not args.no_submit, submit_timeout=args.submit_timeout)
     elif args.command == "submit":
         from .agents import DSPyBackend
         from .submit import submit
