@@ -59,6 +59,8 @@ def main():
     run.add_argument("--model", required=True, help="DSPy/LiteLLM model ID, e.g. gemini/gemini-3.8-flash")
     run.add_argument("--max-tokens", type=int, default=16000, help="Completion-token cap per call, incl. reasoning")
     run.add_argument("--request-timeout", type=int, default=180, help="Seconds per model request")
+    run.add_argument("--reasoning-effort", choices=["low", "medium", "high"],
+                     help="Provider reasoning effort (default: low for GPT-6, provider default otherwise)")
     final = sub.add_parser("submit", help="Refit the best (or a named) candidate and write a submission")
     final.add_argument("workspace", type=Path)
     final.add_argument("--model", required=True, help="DSPy/LiteLLM model ID for the writer")
@@ -68,6 +70,8 @@ def main():
     final.add_argument("--timeout", type=int, default=7200, help="Seconds for fitting and predicting")
     final.add_argument("--max-tokens", type=int, default=16000)
     final.add_argument("--request-timeout", type=int, default=180)
+    final.add_argument("--reasoning-effort", choices=["low", "medium", "high"],
+                     help="Provider reasoning effort (default: low for GPT-6, provider default otherwise)")
     draw = sub.add_parser("draw", help="Print an attempt's Skrub DataOps graph as SVG (lazy; reads no data)")
     draw.add_argument("attempt", type=Path, help="Attempt directory containing plan.py and request.json")
     show = sub.add_parser("show", help="Read the exported experiment report")
@@ -92,12 +96,12 @@ def main():
         from .agents import DSPyBackend
         from .runner import Runner
 
-        Runner(args.workspace, DSPyBackend(args.model, args.max_tokens, args.request_timeout)).run()
+        Runner(args.workspace, DSPyBackend(args.model, args.max_tokens, args.request_timeout, args.reasoning_effort)).run()
     elif args.command == "submit":
         from .agents import DSPyBackend
         from .submit import submit
 
-        record = submit(args.workspace, DSPyBackend(args.model, args.max_tokens, args.request_timeout),
+        record = submit(args.workspace, DSPyBackend(args.model, args.max_tokens, args.request_timeout, args.reasoning_effort),
                         args.candidate, load_task(args.task) if args.task else None,
                         args.max_repairs, args.timeout)
         raise SystemExit(0 if record["status"] == "ok" else 1)

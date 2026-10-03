@@ -15,3 +15,10 @@ def test_non_openai_models_keep_the_existing_settings():
     assert settings["temperature"] == 0.2
     assert settings["max_tokens"] == 6000
     assert "reasoning_effort" not in settings
+
+
+def test_reasoning_effort_is_passed_through():
+    assert lm_settings("gemini/gemini-3.8-flash", 6000, reasoning_effort="high")["reasoning_effort"] == "high"
+    assert "reasoning_effort" not in lm_settings("gemini/gemini-3.8-flash", 6000)
+    assert lm_settings("openai/gpt-6.1-sol", 6000)["reasoning_effort"] == "low"
+    assert lm_settings("openai/gpt-6.1-sol", 6000, reasoning_effort="high")["reasoning_effort"] == "high"

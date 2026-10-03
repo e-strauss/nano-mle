@@ -6,14 +6,17 @@ from typing import Protocol
 from .models import Decision, Finding, Proposal
 
 
-def lm_settings(model: str, max_tokens: int, timeout: int = 180) -> dict:
+def lm_settings(model: str, max_tokens: int, timeout: int = 180, reasoning_effort: str | None = None) -> dict:
     settings = {"max_tokens": max_tokens, "temperature": 0.2, "num_retries": 0,
                 "timeout": timeout, "cache": False}
     if model.removeprefix("openai/").startswith("gpt-6"):
         # DSPy's current reasoning-family detection only covers GPT-5/o-series.
         # Set the Chat Completions reasoning token cap explicitly for GPT-6.
         settings.update(temperature=None, max_tokens=None, max_completion_tokens=max_tokens,
-                        reasoning_effort="low")
+                        reasoning_effort=reasoning_effort or "low")
+    elif reasoning_effort:
+        # LiteLLM maps reasoning_effort to the provider's thinking budget (e.g. Gemini).
+        settings["reasoning_effort"] = reasoning_effort
     return settings
 
 
@@ -26,7 +29,7 @@ class Backend(Protocol):
 
 
 class DSPyBackend:
-    def __init__(self, model: str, max_tokens=16000, timeout=180):
+    def __init__(self, model: str, max_tokens=16000, timeout=180, reasoning_effort=None):
         import os
         import dspy
         from dotenv import load_dotenv
@@ -34,9 +37,9 @@ class DSPyBackend:
         from .prompts import CONTROL_INSTRUCTIONS, PLAN_INSTRUCTIONS, PLANNING_INSTRUCTIONS
 
         load_dotenv()
-        self.model = model
+        self.model = model if not reasoning_effort else f"{model} (reasoning {reasoning_effort})"
         dspy.configure_cache(enable_disk_cache=False, enable_memory_cache=False)
-        kwargs = lm_settings(model, max_tokens, timeout)
+        kwargs = lm_settings(model, max_tokens, timeout, reasoning_effort)
         if model.startswith("gemini/"):
             kwargs["api_key"] = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
         self.lm = dspy.LM(model, **kwargs)
