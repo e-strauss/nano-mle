@@ -4,11 +4,10 @@ import json
 import pandas as pd
 import pytest
 
-from nano_mle.cli import make_demo
-from nano_mle.demo import DemoBackend
 from nano_mle.models import Budget, EvaluationSpec, Task
 from nano_mle.runner import Runner, initialize
 from nano_mle.store import Store
+from scripted import ScriptedBackend, make_scripted_run
 
 
 @pytest.fixture
@@ -23,7 +22,7 @@ def workspace(tmp_path):
 
 
 def test_offline_workflow_and_graph_artifacts(tmp_path):
-    root = make_demo(tmp_path / "demo")
+    root = make_scripted_run(tmp_path / "run")
     store = Store(root)
     candidates = store.records("candidate")
     explorations = store.records("exploration")
@@ -41,8 +40,8 @@ def test_offline_workflow_and_graph_artifacts(tmp_path):
     assert siblings[0]["configuration"] != siblings[1]["configuration"]
     assert len(store.records("attempt")) == 5
     assert store.meta("search_stats")["root"]["visits"] == 3
-    assert store.meta("model") == "demo"
-    assert json.loads((root / "workspace.json").read_text())["model"] == "demo"
+    assert store.meta("model") == "scripted"
+    assert json.loads((root / "workspace.json").read_text())["model"] == "scripted"
     assert all(e["status"] != "running" for e in explorations)
     for exploration in explorations:
         artifact = root / exploration["artifact_path"]
@@ -52,20 +51,20 @@ def test_offline_workflow_and_graph_artifacts(tmp_path):
         assert "CallMethod 'isna'" in operations
         assert "CallMethod 'sum'" in operations
         assert (artifact / "missing_counts.csv").exists()
-    runner = Runner(root, DemoBackend())
+    runner = Runner(root, ScriptedBackend())
     selection = type("Selection", (), {"parent_id": siblings[0]["id"], "reference_ids": []})()
     context = runner.context(selection)
     assert "choose_from" not in context["parent"]["resolved_source"]
     runner.store.close()
     # A completed run never calls the backend again.
     before_calls = len(store.records("model_call"))
-    Runner(root, DemoBackend()).run()
+    Runner(root, ScriptedBackend()).run()
     assert len(store.records("model_call")) == before_calls
     store.close()
 
 
 def test_contract_requires_exploration_and_refuses_relocking(workspace):
-    runner = Runner(workspace, DemoBackend())
+    runner = Runner(workspace, ScriptedBackend())
     spec = EvaluationSpec(scoring="neg_root_mean_squared_error", cv="kfold", rationale="test")
     with pytest.raises(ValueError, match="Successful exploration"):
         runner.establish(spec)
@@ -77,10 +76,10 @@ def test_contract_requires_exploration_and_refuses_relocking(workspace):
 
 
 def test_call_budget_stops_without_another_backend_call(workspace):
-    runner = Runner(workspace, DemoBackend())
+    runner = Runner(workspace, ScriptedBackend())
     runner.store.set_meta("budget", Budget(max_model_calls=1).model_dump())
     runner.store.close()
-    Runner(workspace, DemoBackend()).run()
+    Runner(workspace, ScriptedBackend()).run()
     store = Store(workspace)
     assert len(store.records("model_call")) == 1
     assert store.meta("state") == "complete"
@@ -94,13 +93,13 @@ def test_competing_runner_does_not_change_owner_state(workspace):
     with (workspace / ".run.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         with pytest.raises(ValueError, match="Another runner"):
-            Runner(workspace, DemoBackend()).run()
+            Runner(workspace, ScriptedBackend()).run()
     assert store.meta("state") == "running"
     store.close()
 
 
 def test_interrupted_execution_is_charged_without_replay(workspace):
-    runner = Runner(workspace, DemoBackend())
+    runner = Runner(workspace, ScriptedBackend())
     directory = workspace / "artifacts" / "interrupted"
     directory.mkdir()
     (directory / "usage.json").write_text(json.dumps({"evaluation_count": 3}))
@@ -114,7 +113,7 @@ def test_interrupted_execution_is_charged_without_replay(workspace):
     runner.store.close()
 
 
-class OversizedGrid(DemoBackend):
+class OversizedGrid(ScriptedBackend):
     def implement(self, kind, context, intent):
         if kind != "pipeline":
             return super().implement(kind, context, intent)
@@ -165,7 +164,7 @@ def test_failed_grid_preserves_and_charges_every_variant(workspace):
     assert store.meta("search_stats")["root"] == {"visits": 2, "reward_sum": -2}
     store.close()
 
-class DriftingBackend(DemoBackend):
+class DriftingBackend(ScriptedBackend):
     def implement(self, kind, context, intent):
         source = super().implement(kind, context, intent)
         if kind == 'pipeline':
@@ -197,7 +196,7 @@ def test_missing_libraries_are_recorded_once_per_module(tmp_path, monkeypatch):
     assert data["otherlib"]["count"] == 1
 
 
-class ProbeBackend(DemoBackend):
+class ProbeBackend(ScriptedBackend):
     """Explore, lock, expand once, probe the candidate, then analyse its predictions."""
 
     def control(self, context):
@@ -254,7 +253,7 @@ def test_probe_reports_evidence_but_its_files_are_not_inputs(workspace):
     assert len(store.records("candidate")) == 1  # probes create no candidates
 
 
-class DirectionBackend(DemoBackend):
+class DirectionBackend(ScriptedBackend):
     """Records what the planner is told about the controller's reason to expand."""
 
     def __init__(self):
@@ -277,3 +276,26 @@ def test_planner_receives_the_controller_direction(workspace):
     assert backend.directions and set(backend.directions) == {"Measure a learning curve before tuning"}
     expansions = Store(workspace).records("expansion")
     assert all(e["direction"] == "Measure a learning curve before tuning" for e in expansions)
+
+
+class MalformedOnceBackend(ScriptedBackend):
+    """The first controller answer fails to parse, as a model omitting a required field."""
+
+    def __init__(self):
+        self.errors_seen = []
+
+    def control(self, context):
+        if "previous_answer_error" in context:
+            self.errors_seen.append(context["previous_answer_error"])
+        elif not self.errors_seen:
+            raise ValueError("Failed to parse field decision: probe needs a question it serves")
+        return super().control({k: v for k, v in context.items() if k != "previous_answer_error"})
+
+
+def test_malformed_model_answer_is_retried_with_its_error(workspace):
+    backend = MalformedOnceBackend()
+    Runner(workspace, backend).run()
+    store = Store(workspace)
+    assert backend.errors_seen and "probe needs a question" in backend.errors_seen[0]
+    failed = [c for c in store.records("model_call") if c["status"] == "failed"]
+    assert len(failed) == 1 and store.meta("state") == "complete"

@@ -1,4 +1,4 @@
-"""Explicit live runs; the demo path is entirely offline."""
+"""Command-line entry point."""
 
 import argparse
 import json
@@ -13,29 +13,6 @@ def load_task(path):
     data["sources"] = {name: str((path.parent / value).resolve()) if "://" not in value else value
                        for name, value in data["sources"].items()}
     return Task.model_validate(data)
-
-
-def make_demo(directory, search_policy="greedy"):
-    import numpy as np
-    import pandas as pd
-
-    from .demo import DemoBackend
-    from .models import Budget, Task
-    from .runner import Runner, initialize
-
-    directory = directory.resolve()
-    directory.mkdir(parents=True, exist_ok=False)
-    rng = np.random.default_rng(42)
-    X = rng.normal(size=(120, 3))
-    table = pd.DataFrame(X, columns=["a", "b", "c"])
-    table["target"] = 3 * X[:, 0] - 2 * X[:, 1] + rng.normal(scale=0.2, size=len(X))
-    table.to_csv(directory / "train.csv", index=False)
-    task = Task(description="Independent synthetic regression rows; minimize RMSE",
-                sources={"train": str(directory / "train.csv")}, target="target")
-    workspace = directory / "workspace"
-    initialize(workspace, task, Budget(max_expansions=2, max_evaluations=4), search_policy)
-    Runner(workspace, DemoBackend()).run()
-    return workspace
 
 
 def main():
@@ -76,9 +53,6 @@ def main():
     draw.add_argument("attempt", type=Path, help="Attempt directory containing plan.py and request.json")
     show = sub.add_parser("show", help="Read the exported experiment report")
     show.add_argument("workspace", type=Path)
-    demo = sub.add_parser("demo", help="Offline deterministic demonstration; no API calls")
-    demo.add_argument("directory", type=Path)
-    demo.add_argument("--policy", choices=["greedy", "mcts", "mcgs"], default="greedy")
     args = parser.parse_args()
     if args.command == "init":
         from .models import Budget
@@ -111,8 +85,6 @@ def main():
         draw_main(args.attempt)
     elif args.command == "show":
         print((args.workspace / "report.md").read_text())
-    else:
-        print(f"Offline demo workspace: {make_demo(args.directory, args.policy)}")
 
 
 if __name__ == "__main__":

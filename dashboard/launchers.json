@@ -181,43 +181,6 @@
           "{request_timeout}"
         ]
       ]
-    },
-    {
-      "id": "nano-mle-demo",
-      "label": "nano-mle offline demo (test)",
-      "description": "Deterministic offline demo, no API calls.",
-      "cwd": "..",
-      "root": "../workspaces",
-      "workspace": "{root}/{name}",
-      "fields": [
-        {
-          "name": "name",
-          "label": "Run name",
-          "type": "slug"
-        },
-        {
-          "name": "policy",
-          "label": "Search policy",
-          "type": "select",
-          "options": [
-            "greedy",
-            "mcts",
-            "mcgs"
-          ],
-          "default": "mcts"
-        }
-      ],
-      "steps": [
-        [
-          "uv",
-          "run",
-          "nano-mle",
-          "demo",
-          "{workspace}",
-          "--policy",
-          "{policy}"
-        ]
-      ]
     }
   ]
 }

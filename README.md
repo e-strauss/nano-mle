@@ -16,14 +16,8 @@ boundary checkable.
 
 ```bash
 uv sync
-uv run pytest                                  # offline test suite
-uv run nano-mle demo /tmp/nano-mle-demo        # deterministic run, no API calls
-uv run nano-mle show /tmp/nano-mle-demo/workspace
+uv run pytest      # offline test suite
 ```
-
-The demo uses a scripted backend on a synthetic regression table. It walks the
-full loop: exploration, evaluation setup, a baseline, a planner-requested
-exploration and a two-variant grid.
 
 ## Running a task
 
@@ -298,7 +292,7 @@ still shows which phase was running.
 
 | File | Role |
 |---|---|
-| `cli.py` | Entry point: `init`, `run`, `submit`, `show`, `draw`, `demo`. |
+| `cli.py` | Entry point: `init`, `run`, `submit`, `show`, `draw`. |
 | `runner.py` | Controller loop, budgets, repair loop, exploration/setup/expansion, report export, resume. |
 | `agents.py` | DSPy backend: controller, planner, writer, repairer and interpreter signatures. |
 | `prompts.py` | Instructions for the controller, planner and writer. |
@@ -316,7 +310,6 @@ still shows which phase was running.
 | `libraries.py` | Repository-level record of imported-but-missing libraries. |
 | `submit.py` | `nano-mle submit`: final refit of a candidate, prediction on new rows, format checks. |
 | `draw.py` | `nano-mle draw ATTEMPT`: rebuilds a recorded plan lazily and prints its Skrub `draw_graph` SVG. |
-| `demo.py` | Scripted offline backend. |
 
 `dashboard/` is an optional, harness-agnostic web UI for browsing runs, search trees
 and launching new runs (see its README). `FUTURE_IDEAS.md` collects design notes that

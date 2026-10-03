@@ -1,10 +1,14 @@
-"""Deterministic backend exercises the harness without any model/API calls."""
+"""Deterministic backend for tests: exercises the harness without model calls."""
 
-from .models import Decision, EvaluationSpec, Finding, Proposal
+import numpy as np
+import pandas as pd
+
+from nano_mle.models import Budget, Decision, EvaluationSpec, Finding, Proposal, Task
+from nano_mle.runner import Runner, initialize
 
 
-class DemoBackend:
-    model = "demo"
+class ScriptedBackend:
+    model = "scripted"
 
     def control(self, context):
         counts = context["counts"]
@@ -17,7 +21,7 @@ class DemoBackend:
                             evaluation=EvaluationSpec(scoring="neg_root_mean_squared_error", cv="kfold",
                                                       rationale="Synthetic independent regression observations"))
         if counts["expansions"] >= 2:
-            return Decision(action="stop", reason="Offline demonstration complete")
+            return Decision(action="stop", reason="Scripted run complete")
         return Decision(action="expand", reason="Evaluate baseline then a small grid")
 
     def plan(self, context):
@@ -54,3 +58,19 @@ def build():
         outputs = result["outputs"]
         return [Finding(statement="Computed per-column missing counts and numeric distributions",
                         scope="Full frozen training table", evidence=str(outputs)[:6000])]
+
+
+def make_scripted_run(directory, search_policy="greedy"):
+    directory = directory.resolve()
+    directory.mkdir(parents=True, exist_ok=False)
+    rng = np.random.default_rng(42)
+    X = rng.normal(size=(120, 3))
+    table = pd.DataFrame(X, columns=["a", "b", "c"])
+    table["target"] = 3 * X[:, 0] - 2 * X[:, 1] + rng.normal(scale=0.2, size=len(X))
+    table.to_csv(directory / "train.csv", index=False)
+    task = Task(description="Independent synthetic regression rows; minimize RMSE",
+                sources={"train": str(directory / "train.csv")}, target="target")
+    workspace = directory / "workspace"
+    initialize(workspace, task, Budget(max_expansions=2, max_evaluations=4), search_policy)
+    Runner(workspace, ScriptedBackend()).run()
+    return workspace

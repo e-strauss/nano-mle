@@ -63,8 +63,7 @@ From a laptop: `ssh -N -L 3200:localhost:3200 <node>` and open
   definitions, substituted into the templates and executed without a shell by a
   detached `scripts/launch-runner.mjs`, which records `.launches/<id>/` (command,
   output log, status). Launches survive dashboard restarts and can be stopped with
-  SIGINT, which nano-mle records as an interruption. The `nano-mle-demo` launcher
-  runs the offline demo and costs nothing.
+  SIGINT, which nano-mle records as an interruption.
 
 ## Adding another harness
 

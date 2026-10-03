@@ -1,11 +1,10 @@
 import pandas as pd
 import pytest
 
-from nano_mle.cli import make_demo
-from nano_mle.demo import DemoBackend
 from nano_mle.models import Task
 from nano_mle.store import Store
 from nano_mle.submit import submit
+from scripted import ScriptedBackend, make_scripted_run
 
 FINAL = '''import pandas as pd
 import skrub
@@ -25,7 +24,7 @@ def build():
 '''
 
 
-class FinalBackend(DemoBackend):
+class FinalBackend(ScriptedBackend):
     def __init__(self, source):
         self.source = source
         self.contexts = []
@@ -38,13 +37,13 @@ class FinalBackend(DemoBackend):
 
 @pytest.fixture
 def finished(tmp_path):
-    workspace = make_demo(tmp_path / "demo")
-    train = pd.read_csv(tmp_path / "demo" / "train.csv")
+    workspace = make_scripted_run(tmp_path / "run")
+    train = pd.read_csv(tmp_path / "run" / "train.csv")
     train.insert(0, "id", range(len(train)))
-    train.to_csv(tmp_path / "demo" / "train.csv", index=False)
-    train.drop(columns="target").head(20).assign(id=range(1000, 1020)).to_csv(tmp_path / "demo" / "test.csv", index=False)
-    pd.DataFrame({"id": range(1000, 1020), "target": 0.0}).to_csv(tmp_path / "demo" / "sample.csv", index=False)
-    paths = {name: str(tmp_path / "demo" / f"{name}.csv") for name in ("train", "test", "sample")}
+    train.to_csv(tmp_path / "run" / "train.csv", index=False)
+    train.drop(columns="target").head(20).assign(id=range(1000, 1020)).to_csv(tmp_path / "run" / "test.csv", index=False)
+    pd.DataFrame({"id": range(1000, 1020), "target": 0.0}).to_csv(tmp_path / "run" / "sample.csv", index=False)
+    paths = {name: str(tmp_path / "run" / f"{name}.csv") for name in ("train", "test", "sample")}
     task = Task(description="Synthetic regression; submit target for test rows", sources=paths)
     return workspace, task, paths
 
