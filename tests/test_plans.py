@@ -190,3 +190,20 @@ def test_config_defaults_and_unknown_keys(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="Unknown keys"):
         config.load_config()
     config.load_config.cache_clear()
+
+
+def test_data_volume_study_prompt_follows_config(tmp_path, monkeypatch):
+    import importlib
+    from nano_mle import config, prompts
+
+    for enabled in (True, False):
+        path = tmp_path / f"{enabled}.toml"
+        path.write_text(f"[prompts]\ndata_volume_study = {str(enabled).lower()}\n")
+        monkeypatch.setenv("NANO_MLE_CONFIG", str(path))
+        config.load_config.cache_clear()
+        importlib.reload(prompts)
+        assert ("Data volume study" in prompts.PLAN_INSTRUCTIONS) == enabled
+        assert ("Data volume study" in prompts.CONTROL_INSTRUCTIONS) == enabled
+    monkeypatch.undo()
+    config.load_config.cache_clear()
+    importlib.reload(prompts)

@@ -17,3 +17,9 @@ grid_n_jobs = 1
 # graphs.PRIMITIVES. Disabled for now so the agent may call any library function;
 # functions defined in the plan and lambdas are rejected either way (no UDFs).
 restrict_primitives = false
+
+[prompts]
+# Add the "data volume study" convention (planner and controller): for large sources,
+# decide the modelled population with evidence, i.e. explore which rows and table
+# parts are needed before the lock and measure a learning curve after it.
+data_volume_study = true

@@ -3,6 +3,7 @@
 The plan contract and library notes live in plans.GUIDE. The working conventions
 below are task-independent and adapted from mle-claude.
 """
+from .config import load_config
 from .plans import GUIDE
 
 GOAL = """
@@ -41,13 +42,31 @@ Working conventions:
   memoise or restructure for speed.
 """
 
+# Optional convention, switched by [prompts] data_volume_study in nano-mle.toml.
+DATA_VOLUME_STUDY = """- Data volume study. When sources are large (millions of rows), decide the modelled
+  population with evidence rather than defaulting to all rows or to a small sample.
+  Before the evaluation setup, explore which rows and which parts of large tables
+  the task needs (e.g. only edges or events that touch the modelled and predicted
+  entities) and whether a deterministic sample matches the prediction population.
+  After the lock, measure a learning curve: keep the test folds fixed and train on
+  growing deterministic fractions of the training rows, e.g. a choose_from over the
+  fraction with an estimator that subsamples in fit. Build the added rows exactly
+  like the others, including their label-derived features; a curve that falls as
+  rows are added signals a construction error, not saturation. The curve only
+  reaches the locked population; if it is still rising there, record that a larger
+  population is likely to help.
+"""
+if load_config()["prompts"]["data_volume_study"]:
+    CONVENTIONS += DATA_VOLUME_STUDY
+
 PLAN_INSTRUCTIONS = GOAL + GUIDE + CONVENTIONS + """
 Evaluation setup is unscored: it builds and audits the rows, labels, CV and scorer
 that every later pipeline is scored with. Use exploration evidence for it.
 A repair fixes the planned experiment; a different hypothesis needs a new proposal.
 """
 
-CONTROL_INSTRUCTIONS = GOAL + """
+CONTROL_INSTRUCTIONS = GOAL + ("Working convention:\n" + DATA_VOLUME_STUDY
+                               if load_config()["prompts"]["data_volume_study"] else "") + """
 Choose the next action. Explore with a concrete question and an observable stopping
 condition whenever evidence is missing: before the evaluation setup, and later
 whenever results are unclear or progress stalls. Propose establish_evaluation once

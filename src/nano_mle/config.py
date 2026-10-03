@@ -12,6 +12,7 @@ from pathlib import Path
 DEFAULTS = {
     "execution": {"cpu_threads": 32, "grid_n_jobs": 1},
     "plans": {"restrict_primitives": False},
+    "prompts": {"data_volume_study": True},
 }
 
 
