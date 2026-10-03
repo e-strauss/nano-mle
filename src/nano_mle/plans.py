@@ -52,7 +52,8 @@ Plan contract (checked by the harness):
   no caching.
 
 Skrub and library notes (exact signatures; do not guess other keywords):
-- a.skb.concat([b, c], axis=0) takes only a list and axis; no ignore_index.
+- a.skb.concat([b, c], axis=0) takes only a list and axis; no ignore_index. It works on
+  DataFrames, not Series: concatenate df[['col']] rather than df['col'].
   Chain .reset_index(drop=True) afterwards if a fresh index is needed.
 - X.skb.apply(estimator, y=y) for the final model; there is no method= argument.
   Scorers call predict_proba/decision_function on the learner themselves.
