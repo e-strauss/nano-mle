@@ -41,8 +41,9 @@ Plan contract (checked by the harness):
   X/y/CV/scoring/row-key graphs and the folds with the lock before fitting; drift is
   rejected. Keep the row count and order of X.
 - A probe is written like a pipeline with a single configuration (no choose_from).
-  The harness fits it on the locked folds and reports its fold scores and a preview
-  of its out-of-fold predictions. Probes are evidence, not candidates.
+  The harness fits it on the locked folds and reports its fold scores, an error
+  summary of its out-of-fold predictions (per-class recall and confusion, calibration
+  by decile, or error quantiles) and a preview. Probes are evidence, not candidates.
 - Named skrub.choose_from grids become one candidate per variant (within the
   evaluation budget). Children receive the parent's resolved configuration.
 - Return code without markdown fences. No credentials, no manual fitting or scoring,

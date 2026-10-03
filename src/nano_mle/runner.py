@@ -129,7 +129,8 @@ class Runner:
                    "recent_explorations": self.store.records("exploration")[-4:],
                    # Out-of-fold predictions explorations may read as sources (parquet).
                    "probe_outputs": [{"id": r["id"], "question": r["question"], "candidate_id": r.get("candidate_id"),
-                                      **{k: r["result"]["probe"][k] for k in ("rows", "columns", "fold_scores", "score", "preview")}}
+                                      **{k: r["result"]["probe"][k] for k in ("rows", "columns", "fold_scores", "score", "preview", "summary")
+                                         if k in r["result"]["probe"]}}
                                      for r in self.store.records("probe") if r.get("status") == "ok"],
                    "requested_explorations": requested, "parent": None}
         if selection:

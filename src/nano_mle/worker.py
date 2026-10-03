@@ -110,6 +110,50 @@ def prediction_of(estimator, X):
     return np.asarray(estimator.predict(X))
 
 
+def class_probabilities(estimator, X):
+    """Multiclass probabilities keyed by class label, or None for other estimators.
+
+    A fold whose training rows lack a class has fewer probability columns; keying by
+    the learner's classes_ keeps columns comparable across folds."""
+    labels = getattr(estimator, "classes_", None)
+    if labels is None or not hasattr(estimator, "predict_proba") or np.ndim(labels) != 1 or len(labels) <= 2:
+        return None
+    proba = np.asarray(estimator.predict_proba(X))
+    if proba.ndim != 2 or proba.shape[1] != len(labels):
+        return None
+    return {label: proba[:, j] for j, label in enumerate(np.asarray(labels).tolist())}
+
+
+def error_summary(table):
+    """Generic out-of-fold error evidence computed by the harness, so the model gets
+    error structure without reading prediction files (plans never read them)."""
+    y, pred = table["y"], table["prediction"]
+    if isinstance(y.iloc[0], (list, np.ndarray)):
+        return {"kind": "multi-output", "note": "per-output summaries are not computed"}
+    classes = [c for c in table.columns if c.startswith("proba_")]
+    discrete = classes or (not pd.api.types.is_float_dtype(pred) and y.nunique() <= 50)
+    if discrete:
+        confusion = pd.crosstab(y, pred)
+        if len(confusion) > 30:
+            confusion = confusion.loc[y.value_counts().index[:30]]
+        per_class = pd.DataFrame({"support": y.value_counts(),
+                                  "recall": (y == pred).groupby(y).mean(),
+                                  "precision": (y == pred).groupby(pred).mean()}).fillna(0)
+        return {"kind": "classification", "accuracy": float((y == pred).mean()),
+                "per_class": per_class.round(4).to_string(),
+                "confusion_rows_true_columns_predicted": confusion.to_string()}
+    if set(pd.unique(y)) <= {0, 1} and pred.between(0, 1).all():
+        bins = pd.qcut(pred.rank(method="first"), 10, labels=False)
+        calibration = table.assign(bin=bins).groupby("bin").agg(
+            rows=("y", "size"), mean_prediction=("prediction", "mean"), positive_rate=("y", "mean"))
+        return {"kind": "binary probability", "base_rate": float(y.mean()),
+                "by_prediction_decile": calibration.round(4).to_string()}
+    error = pred.astype(float) - y.astype(float)
+    return {"kind": "regression", "mean_error": float(error.mean()),
+            "absolute_error_quantiles": error.abs().quantile([0.5, 0.9, 0.99]).round(4).to_dict(),
+            "mean_absolute_error_by_fold": error.abs().groupby(table["fold"]).mean().round(4).to_dict()}
+
+
 def audit_outputs(audit):
     """The setup's optional audit: one DataOp or a dict of named DataOps."""
     if audit is None:
@@ -146,8 +190,14 @@ def probe(result, contract, request, directory, phases, started, keys=None):
 
     def capturing(estimator, X, y):
         fold = len(captured)  # one configuration, n_jobs=1: folds are scored in split order
+        classes = class_probabilities(estimator, X)
+        if classes is None:
+            prediction = prediction_of(estimator, X)
+        else:
+            labels = list(classes)
+            prediction = np.asarray(labels, dtype=object)[np.argmax(np.column_stack(list(classes.values())), axis=1)]
         captured.append({"fold": fold, "row": frozen[fold][1], "y": np.asarray(y),
-                         "prediction": prediction_of(estimator, X)})
+                         "prediction": prediction, "classes": classes})
         return base(estimator, X, y)
 
     with phases("grid_search", variants=1, folds=len(frozen)):
@@ -158,8 +208,20 @@ def probe(result, contract, request, directory, phases, started, keys=None):
     with phases("write_predictions"):
         # Multi-output labels and predictions are stored as one list per row.
         cell = lambda a: list(a) if np.ndim(a) > 1 else a
-        table = pd.concat([pd.DataFrame({"row": c["row"], "fold": c["fold"], "y": cell(c["y"]),
-                                         "prediction": cell(c["prediction"])}) for c in captured])
+        # Multiclass: predicted label plus one probability column per class seen in any
+        # fold's training data; a class absent from a fold's training rows gets 0 there.
+        labels = sorted({label for c in captured if c["classes"] for label in c["classes"]}, key=str)
+        frames = []
+        for c in captured:
+            frame = pd.DataFrame({"row": c["row"], "fold": c["fold"], "y": cell(c["y"]),
+                                  "prediction": cell(c["prediction"])})
+            if c["classes"] is not None:
+                for label in labels:
+                    frame[f"proba_{label}"] = c["classes"].get(label, np.zeros(len(frame)))
+            frames.append(frame)
+        table = pd.concat(frames)
+        if labels:
+            table["prediction"] = table["prediction"].astype(type(labels[0]))
         table = table.sort_values("row").reset_index(drop=True)
         if keys is not None:  # evaluated once by the boundary audit
             table.insert(1, "row_key", np.asarray(keys)[table["row"].to_numpy()])
@@ -169,7 +231,8 @@ def probe(result, contract, request, directory, phases, started, keys=None):
     return {"status": "ok", "duration_s": time.monotonic() - started,
             "probe": {"path": str(directory / "oof_predictions.parquet"), "rows": len(table),
                       "columns": list(table.columns), "fold_scores": folds,
-                      "score": float(np.mean(folds)), "preview": table.head(10).to_string()}}
+                      "score": float(np.mean(folds)), "preview": table.head(10).to_string(),
+                      "summary": error_summary(table)}}
 
 
 def execute(request, directory, phases):

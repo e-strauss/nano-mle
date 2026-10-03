@@ -91,7 +91,7 @@ A single controller loop chooses one action at a time:
 | `explore` | The writer produces a graph answering a concrete question; outputs are evaluated and an interpreter turns them into scoped findings. | No |
 | `establish_evaluation` | The writer constructs the modelling population, raw labels, CV and scorer. The harness audits and locks them. | No |
 | `expand` | The search policy selects a parent; the planner proposes a bounded change (or requests an exploration first); the writer implements it; every grid variant is scored. | Yes |
-| `probe` | Fits one configuration (an existing candidate, or a pipeline the writer builds) on the locked folds and reports its fold scores and a preview of its out-of-fold predictions. | No |
+| `probe` | Fits one configuration (an existing candidate, or a pipeline the writer builds) on the locked folds and reports its fold scores and a harness-computed error summary of its out-of-fold predictions. | No |
 | `stop` | Ends the run. | |
 
 Who decides what, compared with a single-agent harness such as mle-claude:
@@ -104,6 +104,20 @@ Who decides what, compared with a single-agent harness such as mle-claude:
 | Writing and fixing code | LLM | LLM writer / repairer |
 | Turning outputs into findings | LLM | LLM interpreter |
 | Scoring and the evaluation lock | harness | harness |
+
+Who knows what. mle-claude is one agent with one continuous context; nano-mle's roles
+are stateless calls that see what the harness passes them:
+
+| Knowledge | mle-claude | nano-mle |
+|---|---|---|
+| Task description and sources | the agent | every role (task and source manifest) |
+| Raw data | read directly, any slice | only through a plan's graph, evaluated by the harness |
+| Exploration results | everything it printed | interpreter sees outputs; other roles see its scoped findings |
+| Earlier code | any file in the workspace | writer sees the parent's and references' resolved source |
+| Model errors | loads out-of-fold predictions and slices freely | probe fold scores, preview and a harness-computed error summary |
+| Intermediate artifacts | reads its own files (convention: no cached features) | never: plans read task sources only, artifact paths are hidden |
+| History and reasoning | its own context window | journal summaries: findings, leaderboard, recent failures, trajectory |
+| Run time | sees wall time | attempt wall time, phase timings and per-variant fit times in the records it is shown |
 
 Every implementation runs in a time-bounded subprocess. If it fails, the repairer
 gets the source and traceback and may fix it, up to `--max-repairs` times. A
@@ -171,8 +185,11 @@ a custom splitter: by its source plus the plan helpers and upper-case constants 
 harness wraps the locked scorer to capture each test fold's predictions during the
 normal fold loop, so nothing is fitted twice, and writes `oof_predictions.parquet`
 with `row` (position in the locked X), `fold`, `y`, `prediction` (positive-class
-probability where available) and `row_key`. The file is for people and the
-dashboard: the model sees only the fold scores and a preview in `probe_outputs`.
+probability, or the predicted label plus one `proba_<class>` column per class) and
+`row_key`. The file is for people and the dashboard. The model sees the fold scores,
+a preview and an error summary computed by the harness: per-class recall, precision
+and confusion for classification, calibration by prediction decile for binary
+probabilities, error quantiles for regression.
 
 **Plan rules.** These are enforced by a source lint (`plans.py`) and a runtime graph
 check (`graphs.py`):

@@ -188,6 +188,7 @@ def build():
     assert list(oof.columns) == ['row', 'row_key', 'fold', 'y', 'prediction']
     assert sorted(oof['row']) == list(range(120)) and oof['prediction'].between(0, 1).all()
     assert oof.loc[oof['row'] == 7, 'row_key'].item() == '1:2'
+    assert probed['probe']['summary']['kind'] == 'binary probability'
     assert probed['evaluation_count'] == 0
     grid = run_plan(tmp_path / 'grid', contract['setup_source'] + body.format(c="skrub.choose_from([0.1, 1.0], name='C')"),
                     {'sources': {'tmp': {'path': str(tmp_path)}}, 'kind': 'probe', 'contract': contract, 'folds_path': str(tmp_path / 'setup' / 'folds.npz')}, 60)
@@ -304,3 +305,43 @@ def build():
                        'folds_path': str(tmp_path / 'setup' / 'folds.npz')}, 120)
     assert result['status'] == 'ok', result
     assert result['evaluation_count'] == 2
+
+
+def test_multiclass_probe_labels_probabilities_consistently(tmp_path):
+    data = tmp_path / 'classes.csv'
+    labels = [1] * 20 + [2] * 20 + [3] * 19 + [5]  # one row: absent from one fold's training data
+    pd.DataFrame({'a': [i % 7 for i in range(60)], 'target': labels}).to_csv(data, index=False)
+    source = f'''import pandas as pd
+import skrub
+from sklearn.model_selection import KFold
+
+def build():
+    data = skrub.as_data_op({str(data)!r}).skb.apply_func(pd.read_csv)
+    X = data[['a']].skb.mark_as_X(cv=KFold(3, shuffle=True, random_state=0), split_kwargs={{}})
+    return {{'X': X, 'y': data['target'].skb.mark_as_y(), 'scoring': 'accuracy'}}
+'''
+    setup = run_plan(tmp_path / 'setup', source, {'sources': {'tmp': {'path': str(tmp_path)}}, 'kind': 'evaluation'}, 60)
+    assert setup['status'] == 'ok', setup
+    contract = create_contract(setup['snapshot'], evaluation_source(source),
+                               EvaluationSpec(scoring='accuracy', rationale='multiclass'))
+    body = '''
+from sklearn.linear_model import LogisticRegression
+def build():
+    setup = build_evaluation()
+    return {'pred': setup['X'].skb.apply(LogisticRegression(max_iter=500), y=setup['y']),
+            'scoring': setup['scoring']}
+'''
+    probed = run_plan(tmp_path / 'probe', contract['setup_source'] + body,
+                      {'sources': {'tmp': {'path': str(tmp_path)}}, 'kind': 'probe', 'contract': contract,
+                       'folds_path': str(tmp_path / 'setup' / 'folds.npz')}, 60)
+    assert probed['status'] == 'ok', probed
+    oof = pd.read_parquet(probed['probe']['path'])
+    assert [c for c in oof.columns if c.startswith('proba_')] == ['proba_1', 'proba_2', 'proba_3', 'proba_5']
+    assert set(oof['prediction']) <= {1, 2, 3, 5}
+    sums = oof[['proba_1', 'proba_2', 'proba_3', 'proba_5']].sum(axis=1)
+    assert ((sums - 1).abs() < 1e-6).all()
+    missing = oof.groupby('fold')['proba_5'].max()
+    assert (missing == 0).sum() == 1  # the fold whose training rows lack class 5
+    summary = probed['probe']['summary']
+    assert summary['kind'] == 'classification' and 'recall' in summary['per_class']
+    assert 'confusion' in ' '.join(summary)

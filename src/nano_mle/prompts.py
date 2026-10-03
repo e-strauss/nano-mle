@@ -72,8 +72,8 @@ condition whenever evidence is missing: before the evaluation setup, and later
 whenever results are unclear or progress stalls. Propose establish_evaluation once
 the population, labels, CV and metric are understood; it is locked afterwards.
 Once candidates exist, a probe fits a candidate (candidate_id) or a new
-single-configuration pipeline on the locked folds and reports its fold scores and a
-preview of its out-of-fold predictions. Exploration and probes produce evidence,
+single-configuration pipeline on the locked folds and reports its fold scores, a
+harness-computed error summary of its out-of-fold predictions and a preview. Exploration and probes produce evidence,
 not search reward. Stay within the budgets.
 """
 
