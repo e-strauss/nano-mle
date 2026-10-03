@@ -23,3 +23,15 @@ restrict_primitives = false
 # decide the modelled population with evidence, i.e. explore which rows and table
 # parts are needed before the lock and measure a learning curve after it.
 data_volume_study = true
+
+# Memory parameters, read at `nano-mle init --memory <name>` and recorded in the
+# workspace. Omitted keys use the defaults shown.
+[memory.window]
+# leaderboard = 8     # best candidates shown
+# explorations = 4    # latest explorations shown, with their output previews
+# failures = 4        # latest failed candidates shown
+# trajectory = 6      # ancestors of the selected parent shown
+
+[memory.full]
+# max_chars = 400000  # JSON size cap; oldest explorations, then failures, then
+#                     # lowest-ranked candidates are omitted beyond it

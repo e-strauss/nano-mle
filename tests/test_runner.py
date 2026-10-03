@@ -53,7 +53,7 @@ def test_offline_workflow_and_graph_artifacts(tmp_path):
         assert (artifact / "missing_counts.csv").exists()
     runner = Runner(root, ScriptedBackend())
     selection = type("Selection", (), {"parent_id": siblings[0]["id"], "reference_ids": []})()
-    context = runner.context(selection)
+    context = runner.context("plan", selection)
     assert "choose_from" not in context["parent"]["resolved_source"]
     runner.store.close()
     # A completed run never calls the backend again.
@@ -176,7 +176,7 @@ def test_drift_is_warning_without_candidates_or_reward(workspace):
     runner = Runner(workspace, DriftingBackend())
     runner.explore('Inspect data', 'summary')
     runner.establish(EvaluationSpec(scoring='neg_root_mean_squared_error', rationale='independent rows'))
-    assert 'build_evaluation' in runner.context()['locked_evaluation_source']
+    assert 'build_evaluation' in runner.context("control")["locked_evaluation_source"]
     runner.expand()
     assert runner.store.records('candidate') == []
     assert runner.counts()['evaluations'] == 0

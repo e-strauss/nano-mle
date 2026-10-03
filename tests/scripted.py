@@ -54,13 +54,16 @@ def build():
     def repair(self, kind, context, intent, source, error):
         return source
 
+    def summarize(self, context, instruction):
+        return f"{len(context)} parts summarized"
+
     def interpret(self, context, question, result):
         outputs = result["outputs"]
         return [Finding(statement="Computed per-column missing counts and numeric distributions",
                         scope="Full frozen training table", evidence=str(outputs)[:6000])]
 
 
-def make_scripted_run(directory, search_policy="greedy"):
+def make_scripted_run(directory, search_policy="greedy", memory_name="window", backend=None):
     directory = directory.resolve()
     directory.mkdir(parents=True, exist_ok=False)
     rng = np.random.default_rng(42)
@@ -71,6 +74,6 @@ def make_scripted_run(directory, search_policy="greedy"):
     task = Task(description="Independent synthetic regression rows; minimize RMSE",
                 sources={"train": str(directory / "train.csv")}, target="target")
     workspace = directory / "workspace"
-    initialize(workspace, task, Budget(max_expansions=2, max_evaluations=4), search_policy)
-    Runner(workspace, ScriptedBackend()).run()
+    initialize(workspace, task, Budget(max_expansions=2, max_evaluations=4), search_policy, memory_name)
+    Runner(workspace, backend or ScriptedBackend()).run()
     return workspace

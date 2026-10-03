@@ -12,6 +12,7 @@ from .contracts import create_contract, digest, source_manifest, verify_contract
 from .execution import run_plan
 from .models import Budget, Task
 from .libraries import record_missing
+from .memory import Journal, memory
 from .plans import MissingLibrary, evaluation_source, resolve_source, validate_source
 from .search import policy, update_stats, valid
 from .store import Store, new_id
@@ -21,8 +22,10 @@ class ModelCallBudgetExceeded(RuntimeError):
     pass
 
 
-def initialize(workspace: Path, task: Task, budget: Budget, search_policy="greedy"):
+def initialize(workspace: Path, task: Task, budget: Budget, search_policy="greedy", memory_name="window"):
     manifest = source_manifest(task)
+    params = load_config()["memory"].get(memory_name, {})
+    memory(memory_name, params)  # unknown names or parameters fail before anything is written
     workspace.mkdir(parents=True, exist_ok=False)
     (workspace / "artifacts").mkdir()
     store = Store(workspace)
@@ -31,10 +34,11 @@ def initialize(workspace: Path, task: Task, budget: Budget, search_policy="greed
         store.set_meta("sources", manifest)
         store.set_meta("budget", budget.model_dump())
         store.set_meta("policy", search_policy)
+        store.set_meta("memory", {"name": memory_name, "params": params})
         store.set_meta("state", "ready")
         store.set_meta("actions", 0)
         store.set_meta("search_stats", {})
-        store.event("initialized", policy=search_policy)
+        store.event("initialized", policy=search_policy, memory=memory_name)
         export_workspace(store)
     finally:
         store.close()
@@ -44,7 +48,7 @@ def export_workspace(store):
     workspace = store.workspace
     candidates = store.records("candidate")
     metadata = {"task": store.meta("task"), "sources": store.meta("sources"),
-                "budget": store.meta("budget"), "policy": store.meta("policy"), "model": store.meta("model"), "config": store.meta("config"),
+                "budget": store.meta("budget"), "policy": store.meta("policy"), "memory": store.meta("memory"), "model": store.meta("model"), "config": store.meta("config"),
                 "elapsed_s": store.meta("elapsed_s"),
                 "state": store.meta("state"), "evaluation": store.meta("contract")}
     (workspace / "workspace.json").write_text(json.dumps(metadata, indent=2))
@@ -104,6 +108,10 @@ class Runner:
         self.task = Task.model_validate(self.store.meta("task"))
         self.budget = Budget.model_validate(self.store.meta("budget"))
         self.policy = policy(self.store.meta("policy"), self.budget.max_expansions)
+        chosen = self.store.meta("memory", {"name": "window", "params": {}})  # workspaces before memories
+        self.memory = memory(chosen["name"], chosen["params"])
+        self.memory.ask = lambda context, instruction: self.call("summarize", context=context, instruction=instruction)
+        self.store.listeners.append(self.memory.observe)
         self.notify = print
         self._clock = None
 
@@ -139,46 +147,26 @@ class Runner:
                 "actions": self.store.meta("actions", 0),
                 "model_calls": len(self.store.records("model_call"))}
 
-    def context(self, selection=None, requested=0):
-        candidates = self.store.records("candidate")
-        findings = self.store.records("finding")
-        superseded = {f for record in findings for f in record["supersedes"]}
-        active_findings = [f for f in findings if f["id"] not in superseded]
+    def context(self, role, selection=None, requested=0, query=None, extra=None):
+        """The fixed parts come from the harness, the history from the memory."""
         contract = self.store.meta("contract")
         summary = ({k: contract[k] for k in ("id", "spec", "rows", "fold_fingerprint")}
                    if contract else None)
         context = {"task": self.task.model_dump(), "contract": summary,
-                   "sources": self.store.meta("sources"),
                    "locked_evaluation_source": contract["setup_source"] if contract else None,
-                   "findings": active_findings, "counts": self.counts(),
-                   "budget": self.budget.model_dump(),
+                   "counts": self.counts(), "budget": self.budget.model_dump(),
                    "remaining_evaluations": self.budget.max_evaluations - self.counts()["evaluations"],
-                   "leaderboard": sorted(valid(candidates), key=lambda c: c["score"], reverse=True)[:8],
-                   "recent_failures": [c for c in candidates if c["status"] != "ok"][-4:],
-                   "recent_explorations": self.store.records("exploration")[-4:],
-                   # Out-of-fold predictions explorations may read as sources (parquet).
-                   "probe_outputs": [{"id": r["id"], "question": r["question"], "candidate_id": r.get("candidate_id"),
-                                      **{k: r["result"]["probe"][k] for k in ("rows", "columns", "fold_scores", "score", "preview", "summary")
-                                         if k in r["result"]["probe"]}}
-                                     for r in self.store.records("probe") if r.get("status") == "ok"],
                    "requested_explorations": requested, "parent": None, "time": self.time_context()}
+        context.update(self.memory.view(role, Journal(self.store), query,
+                                        selection.parent_id if selection else None))
         if selection:
             context["selection"] = {"parent_id": selection.parent_id, "reference_ids": selection.reference_ids}
             context["requested_explorations_remaining"] = self.budget.max_requested_explorations - requested
             context["references"] = [self._candidate_context(self.store.get(i)) for i in selection.reference_ids]
             if selection.parent_id != "root":
-                parent = self.store.get(selection.parent_id)
-                context["parent"] = self._candidate_context(parent)
-                trajectory = []
-                cursor = parent
-                while cursor["id"] != "root":
-                    trajectory.append(cursor)
-                    if cursor["parent_id"] == "root":
-                        break
-                    cursor = self.store.get(cursor["parent_id"])
-                context["trajectory"] = list(reversed(trajectory[:6]))
-        sources = context.pop("sources")
-        return {**without_paths(context), "sources": sources}
+                context["parent"] = self._candidate_context(self.store.get(selection.parent_id))
+        context.update(extra or {})
+        return {**without_paths(context), "sources": self.store.meta("sources")}
 
     def _candidate_context(self, candidate):
         path = self.workspace / candidate["source_path"]
@@ -222,9 +210,11 @@ class Runner:
             return self.budget.execution_timeout
         return max(1, min(self.budget.execution_timeout, int(remaining)))
 
-    def execute(self, kind, record, context, intent, source=None):
+    def execute(self, kind, record, scope, intent, source=None):
+        """scope: the context arguments (selection, requested, extra) of the action."""
         if source is None:
-            source = self.call("implement", kind=kind, context=context, intent=intent)
+            source = self.call("implement", kind=kind, intent=intent,
+                               context=self.context("implement", query=json.dumps(intent), **scope))
         result = {"status": "failed", "error": "No attempt executed"}
         for repair_number in range(self.budget.max_repairs + 1):
             attempt_id = new_id("attempt")
@@ -270,11 +260,12 @@ class Runner:
                 break
             summary = " ".join(result["error"].split())  # some messages start with a line break
             self.notify(f"  Repair {repair_number + 1}: {summary[:180]}")
-            source = self.call("repair", kind=kind, context=context, intent=intent, source=source,
-                               error=result.get("traceback", result["error"]))
+            error = result.get("traceback", result["error"])
+            source = self.call("repair", kind=kind, intent=intent, source=source, error=error,
+                               context=self.context("repair", query=error, **scope))
         return result, attempt
 
-    def explore(self, question, stopping_condition, expansion_id=None, context=None):
+    def explore(self, question, stopping_condition, expansion_id=None, scope=None):
         if self.counts()["explorations"] >= self.budget.max_explorations:
             raise ValueError("Exploration budget exhausted")
         record = {"id": new_id("exploration"), "question": question,
@@ -282,13 +273,14 @@ class Runner:
                   "status": "running", "attempt_ids": []}
         self.store.put("exploration", record)
         self.notify(f"Explore: {question}")
-        context = context or self.context()
-        result, attempt = self.execute("exploration", record, context,
+        scope = scope or {}
+        result, attempt = self.execute("exploration", record, scope,
                                        {"question": question, "stopping_condition": stopping_condition})
         record.update(status=result["status"], result=result, artifact_path=attempt["path"])
         self.store.put("exploration", record)
         if result["status"] == "ok":
-            findings = self.call("interpret", context=context, question=question, result=result)
+            findings = self.call("interpret", question=question, result=result,
+                                 context=self.context("interpret", query=question, **scope))
             existing = {f["id"] for f in self.store.records("finding")}
             for finding in findings[:8]:
                 if not set(finding.supersedes) <= existing:
@@ -317,7 +309,7 @@ class Runner:
         self.store.put("probe", record)
         self.notify(f"Probe {decision.candidate_id or 'new pipeline'}: {decision.question}")
         intent = {"question": decision.question, "purpose": "out-of-fold predictions for later analysis"}
-        result, attempt = self.execute("probe", record, self.context(), intent, source=source)
+        result, attempt = self.execute("probe", record, {}, intent, source=source)
         record.update(status=result["status"], result=result, artifact_path=attempt["path"])
         self.store.put("probe", record)
         export_workspace(self.store)
@@ -332,7 +324,7 @@ class Runner:
         record = {"id": new_id("setup"), "status": "running", "spec": spec.model_dump(), "attempt_ids": []}
         self.store.put("evaluation_setup", record)
         self.notify("Audit agent-authored evaluation setup")
-        result, attempt = self.execute("evaluation", record, self.context(), spec.model_dump())
+        result, attempt = self.execute("evaluation", record, {}, spec.model_dump())
         record.update(status=result["status"], result=result, artifact_path=attempt["path"])
         self.store.put("evaluation_setup", record)
         if result["status"] != "ok":
@@ -387,10 +379,11 @@ class Runner:
         self.notify(f"Expand {selection.parent_id} ({self.policy.name})")
         requested = 0
         while True:
-            context = self.context(selection, requested)
             # The controller's reason for expanding is the requested direction; the
             # planner grounds the concrete experiment in it and the selected parent.
-            context["controller_direction"] = direction
+            scope = {"selection": selection, "requested": requested,
+                     "extra": {"controller_direction": direction}}
+            context = self.context("plan", query=direction, **scope)
             proposal = self.call("plan", context=context)
             if proposal.action == "experiment":
                 break
@@ -399,12 +392,13 @@ class Runner:
                 self.store.put("expansion", record)
                 return
             record["exploration_ids"].append(self.explore(proposal.question, proposal.stopping_condition,
-                                                         record["id"], context))
+                                                         record["id"], scope))
             self.store.put("expansion", record)
             requested += 1
-        record.update(proposal=proposal.model_dump(), finding_ids=[f["id"] for f in context["findings"]])
+        record.update(proposal=proposal.model_dump(), finding_ids=[f["id"] for f in context.get("findings", [])
+                                                                     if not f.get("superseded")])
         self.store.put("expansion", record)
-        result, attempt = self.execute("pipeline", record, context, proposal.model_dump())
+        result, attempt = self.execute("pipeline", record, scope, proposal.model_dump())
         record.update(status=result["status"], result=result)
         if result.get("warning") == "contract_drift":
             record.update(status="rejected", candidate_ids=[])
@@ -488,9 +482,8 @@ class Runner:
                         self.store.event("stopped", reason="Time budget exhausted")
                         break
                     self.store.set_meta("actions", self.counts()["actions"] + 1)
-                    context = self.context()
-                    context["next_expansion_parent"] = self.next_parent_context()
-                    decision = self.call("control", context=context)
+                    decision = self.call("control", context=self.context(
+                        "control", extra={"next_expansion_parent": self.next_parent_context()}))
                     self.store.event("controller_decision", **decision.model_dump())
                     if decision.action == "stop":
                         self.store.event("stopped", reason=decision.reason)

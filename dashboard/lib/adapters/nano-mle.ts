@@ -464,7 +464,7 @@ function overview(ws: Workspace): Section[] {
 // The controller's input is rebuilt from the journal on every call; its transcript
 // (artifacts/calls/<id>.input.json) is immutable once written, so sizes are cached.
 const CONTEXT_PARTS: [string, string[]][] = [
-  ["recent explorations", ["recent_explorations"]],
+  ["explorations", ["recent_explorations", "explorations"]],  // window / full memory
   ["leaderboard", ["leaderboard"]],
   ["findings", ["findings"]],
   ["task", ["task"]],

@@ -16,6 +16,7 @@ class Store:
         self.workspace = workspace
         self.db = sqlite3.connect(workspace / "state.db")
         self.db.execute("PRAGMA foreign_keys=ON")
+        self.listeners = []  # called with (kind, record) after each record write
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, payload TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS records (
@@ -41,6 +42,8 @@ class Store:
                 "ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
                 (kind, record["id"], json.dumps(record)),
             )
+        for listener in self.listeners:
+            listener(kind, record)
 
     def records(self, kind):
         rows = self.db.execute("SELECT payload FROM records WHERE kind=? ORDER BY seq", (kind,))
@@ -68,3 +71,7 @@ class Store:
             self.db.execute("UPDATE records SET payload=? WHERE id=?",
                             (json.dumps(expansion), expansion["id"]))
             self.db.execute("INSERT OR REPLACE INTO meta VALUES ('search_stats',?)", (json.dumps(stats),))
+        for listener in self.listeners:
+            for candidate in candidates:
+                listener("candidate", candidate)
+            listener("expansion", expansion)

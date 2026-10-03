@@ -26,6 +26,7 @@ class Backend(Protocol):
     def implement(self, kind: str, context: dict, intent: dict) -> str: ...
     def repair(self, kind: str, context: dict, intent: dict, source: str, error: str) -> str: ...
     def interpret(self, context: dict, question: str, result: dict) -> list[Finding]: ...
+    def summarize(self, context: dict, instruction: str) -> str: ...  # for memories
 
 
 class DSPyBackend:
@@ -82,6 +83,14 @@ class DSPyBackend:
             PLAN_INSTRUCTIONS + "\nRepair the error while preserving the planned experiment."))
         self.interpreter = dspy.Predict(Interpret)
 
+        class Summarize(dspy.Signature):
+            """Condense the run history in context as the instruction asks; keep ids, scores and evidence."""
+            context: str = dspy.InputField()
+            instruction: str = dspy.InputField()
+            summary: str = dspy.OutputField()
+
+        self.summarizer = dspy.Predict(Summarize)
+
     def _call(self, module, **kwargs):
         with self.dspy.context(lm=self.lm, adapter=self.adapter):
             return module(**{k: json.dumps(v) if isinstance(v, (dict, list)) else v for k, v in kwargs.items()})
@@ -102,3 +111,6 @@ class DSPyBackend:
     def interpret(self, context, question, result):
         return [Finding.model_validate(f) for f in self._call(self.interpreter, context=context,
                                                             question=question, result=result).findings]
+
+    def summarize(self, context, instruction):
+        return self._call(self.summarizer, context=context, instruction=instruction).summary

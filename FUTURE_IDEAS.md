@@ -77,3 +77,29 @@ provenance preserved.
 
 Multiple evaluation branches and their allocation policy are deferred. The current
 nano-mle design should first support one agent-authored, locked evaluation setup.
+
+## Retrieval memory
+
+A third memory beside `window` and `full` (see the README's Memory section), modelled
+on MLEvolve's retrospective memory ([MLEvolve](https://arxiv.org/html/2606.06473v1)).
+MLEvolve keeps a static knowledge base of models per task type, used when drafting
+the first solution. It also keeps a global memory: after every valid node it stores
+the plan, outcome, analysis, logs, errors and metrics. Retrieval fuses lexical and
+embedding (FAISS) rankings by reciprocal rank and depends on the stage: planning
+queries with the plan text, debugging with the error message. Different agents read
+different scopes (their own branch, successful trajectories of other branches).
+Removing the memory dropped their lite-benchmark medal rate from 82% to 68%.
+
+In nano-mle the memory API already carries what this needs. Each role passes a query:
+the planner the controller's direction, the repairer the error, the writer its
+intent. `observe` can maintain the index after each record write. The index must be
+rebuildable from the journal so resume keeps working.
+
+Open questions:
+
+- What is indexed: whole records, or one entry per attempt (plan, outcome, error)?
+- Embeddings add a dependency and possibly an API; keep them an optional extra.
+- How large is the gain over `window` here? Measure it with the context-size chart
+  and scores on the same tasks, as for search policies.
+- With evaluation branches, retrieval needs scopes: within a branch and across
+  branches, with provenance kept.

@@ -31,6 +31,8 @@ def main():
     init.add_argument("workspace", type=Path)
     init.add_argument("--task", required=True, type=Path)
     init.add_argument("--policy", choices=["greedy", "mcts", "mcgs"], default="greedy")
+    init.add_argument("--memory", choices=["window", "full"], default="window",
+                      help="What model calls see of the run's history; parameters in nano-mle.toml [memory.<name>]")
     init.add_argument("--max-expansions", type=int, default=6)
     init.add_argument("--max-explorations", type=int, default=8)
     init.add_argument("--max-evaluations", type=int, default=24)
@@ -74,7 +76,7 @@ def main():
                         max_repairs=args.max_repairs, max_probes=args.max_probes,
                         execution_timeout=args.execution_timeout,
                         max_model_calls=args.max_model_calls, max_wall_seconds=args.time_budget)
-        initialize(args.workspace.resolve(), load_task(args.task), budget, args.policy)
+        initialize(args.workspace.resolve(), load_task(args.task), budget, args.policy, args.memory)
         print(f"Initialized {args.workspace.resolve()}")
     elif args.command == "run":
         from .agents import DSPyBackend

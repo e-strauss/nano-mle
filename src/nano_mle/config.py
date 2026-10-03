@@ -13,6 +13,9 @@ DEFAULTS = {
     "execution": {"cpu_threads": 32, "grid_n_jobs": 1},
     "plans": {"restrict_primitives": False},
     "prompts": {"data_volume_study": True},
+    # Parameters per memory, e.g. [memory.window] leaderboard = 8; empty means the
+    # memory's own defaults (see memory.py).
+    "memory": {"window": {}, "full": {}},
 }
 
 

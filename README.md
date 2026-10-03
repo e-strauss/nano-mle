@@ -4,7 +4,8 @@ A small, sequential harness for LLM-driven ML experimentation on tabular data.
 A language model proposes data explorations, an evaluation setup and pipeline
 experiments; the harness executes them, enforces budgets, locks the evaluation,
 records every attempt and runs an interchangeable search policy (greedy, MCTS or
-MCGS) over the resulting candidates.
+MCGS) over the resulting candidates. An interchangeable memory decides what each
+model call sees of the run's history.
 
 All model-written code is expressed as [Skrub DataOps](https://skrub-data.org)
 computation graphs: data reads, joins, aggregations, features and estimators are
@@ -46,7 +47,7 @@ uv run pytest      # offline test suite
 3. **Initialise a workspace** (no model calls) and **run** it:
 
    ```bash
-   uv run nano-mle init workspaces/my-run --task task.json --policy greedy \
+   uv run nano-mle init workspaces/my-run --task task.json --policy greedy --memory window \
      --max-model-calls 30 --max-expansions 3 --max-explorations 4 \
      --max-evaluations 8 --max-repairs 2 --execution-timeout 1800 --time-budget 8h
    uv run nano-mle run workspaces/my-run --model openai/gpt-6.1-sol
@@ -75,6 +76,7 @@ the configuration it used in its workspace metadata.
 | `[execution] cpu_threads` | 32 | Cores the workers may use; 0 means all. Workers are pinned to the first `cpu_threads` cores, a hard cap even when a plan sets `n_jobs=-1`; concurrent runs share those cores. OpenMP/BLAS thread counts are set to match. |
 | `[execution] grid_n_jobs` | 1 | Fits run in parallel processes by the grid search; each gets `cpu_threads // grid_n_jobs` threads and its own copy of X and y, so values above 1 only pay off for small data. Probes fit sequentially with all threads. |
 | `[plans] restrict_primitives` | false | Limit `apply_func` to the curated primitives in `graphs.PRIMITIVES`. Disabled for now, so plans may call any library function; plan-defined functions and lambdas are rejected either way. |
+| `[memory.<name>] …` | memory defaults | Parameters of a memory, read at `init` (e.g. `[memory.window] leaderboard = 8`, `[memory.full] max_chars = 400000`). |
 | `[prompts] data_volume_study` | true | Adds the data-volume-study convention for the planner and controller: for large sources, explore which rows and table parts are needed before the lock, and measure a learning curve over training-set size after it. |
 
 ## Submission
@@ -125,26 +127,8 @@ are stateless calls that see what the harness passes them:
 | Earlier code | any file in the workspace | writer sees the parent's and references' resolved source |
 | Model errors | loads out-of-fold predictions and slices freely | probe fold scores, preview and a harness-computed error summary |
 | Intermediate artifacts | reads its own files (convention: no cached features) | never: plans read task sources only, artifact paths are hidden |
-| History and reasoning | its own context window | journal summaries: findings, leaderboard, recent failures, trajectory |
+| History and reasoning | its own context window | what the [memory](#memory) shows: by default findings, leaderboard, recent explorations and failures, trajectory |
 | Run time | sees wall time | attempt wall time, phase timings and per-variant fit times in the records it is shown |
-
-The controller's context is rebuilt from the journal on every call. Most parts are
-windows, so it grows early and then levels off; only findings grow without bound.
-Example: a control call of a 4 h Gemini forest-cover run, after 8 expansions:
-
-| Part | Size | Bound |
-|---|---|---|
-| Recent explorations (with their output previews) | 20 KB | last 4 |
-| Leaderboard (configurations, fold scores) | 17 KB | top 8 |
-| Task description | 6.5 KB | fixed |
-| Findings | 4 KB | all active (superseded ones dropped) |
-| Probe outputs (summary, preview) | 2.7 KB | probe budget |
-| Locked evaluation source | 1.5 KB | fixed |
-| Next parent, time, budgets, counts, sources | 2.5 KB | fixed |
-
-Over that run the context went 7 KB (first call) → 34 KB (evaluation locked) →
-51 KB (after 3 expansions) → 55 KB (after 8), about 14k tokens. The dashboard plots
-this per control call, stacked by part.
 
 Every implementation runs in a time-bounded subprocess. If it fails, the repairer
 gets the source and traceback and may fix it, up to `--max-repairs` times. A
@@ -161,6 +145,52 @@ past it: its timeout is the smaller of `--execution-timeout` and the remaining t
 The controller and planner see `context.time` (budget, elapsed and remaining seconds,
 and the median attempt duration per kind in this run) and are asked to choose and size
 actions that fit.
+
+## Memory
+
+The journal (`state.db`) holds the complete history. A memory decides which part of
+it each model call sees, so it can be swapped like the search policy:
+
+```python
+class Memory(Protocol):
+    name: str
+    ask: Callable[[dict, str], str] | None   # bound by the runner
+
+    def view(self, role, journal, query=None, parent_id=None) -> dict: ...
+    def observe(self, kind, record) -> None: ...
+```
+
+| Rule | Why |
+|---|---|
+| Every role goes through `view`: controller, planner, writer, repairer, interpreter | one place decides what the model sees |
+| Each role brings a query: none for the controller, the controller's direction for the planner, the intent for the writer, the error for the repairer, the question for the interpreter | stage-aware retrieval becomes possible (e.g. similar past errors for the repairer) |
+| The harness adds the fixed parts (task, contract, budgets, counts, time, selected parent and references) and strips artifact paths after the view | a memory cannot hide the budget or expose earlier outputs |
+| `journal` is read-only; derived state (an index, summaries) must be rebuildable from it, fed by `observe` after each record write | resume works as for search policies |
+| `ask(context, instruction)` runs a journaled `summarize` call counted against `--max-model-calls` | a memory's own model use shows up in the budget |
+| Chosen at `init --memory <name>`, parameters from `[memory.<name>]` in `nano-mle.toml`, recorded in the workspace | the memory is an experimental variable, fixed for a run |
+
+| Memory | View |
+|---|---|
+| `window` (default) | the best 8 candidates, the last 4 explorations with their output previews, the last 4 failures, all active findings, all probe outputs, the parent's last 6 ancestors |
+| `full` | everything recorded: all candidates, failures, explorations, findings (superseded ones flagged), probes and the whole lineage, up to `max_chars` of JSON (default 400,000); beyond it the oldest explorations, then the oldest failures, then the lowest-ranked candidates are omitted and counted |
+
+With `window`, the context grows early and then levels off; only findings grow
+without bound.
+Example: a control call of a 4 h Gemini forest-cover run, after 8 expansions:
+
+| Part | Size | Bound |
+|---|---|---|
+| Recent explorations (with their output previews) | 20 KB | last 4 |
+| Leaderboard (configurations, fold scores) | 17 KB | top 8 |
+| Task description | 6.5 KB | fixed |
+| Findings | 4 KB | all active (superseded ones dropped) |
+| Probe outputs (summary, preview) | 2.7 KB | probe budget |
+| Locked evaluation source | 1.5 KB | fixed |
+| Next parent, time, budgets, counts, sources | 2.5 KB | fixed |
+
+Over that run the context went 7 KB (first call) → 34 KB (evaluation locked) →
+51 KB (after 3 expansions) → 55 KB (after 8), about 14k tokens. The dashboard plots
+this per control call, stacked by part.
 
 ## Plans
 
@@ -297,7 +327,7 @@ siblings under the same parent.
 
 ```
 state.db         authoritative journal: metadata, records and events (SQLite)
-workspace.json   task, sources, budget, policy, model, state and evaluation contract
+workspace.json   task, sources, budget, policy, memory, model, state and evaluation contract
 graph.json       candidates with parent, reference and evidence edges, search statistics
 report.md        leaderboard, evaluation audit, drift warnings and findings
 artifacts/
@@ -321,6 +351,7 @@ still shows which phase was running.
 |---|---|
 | `cli.py` | Entry point: `init`, `run`, `submit`, `show`, `draw`. |
 | `runner.py` | Controller loop, budgets, repair loop, exploration/setup/expansion, report export, resume. |
+| `memory.py` | Memory protocol, read-only journal view, `window` and `full` memories. |
 | `agents.py` | DSPy backend: controller, planner, writer, repairer and interpreter signatures. |
 | `prompts.py` | Instructions for the controller, planner and writer. |
 | `plans.py` | Plan guide shown to the writer, source lint, locked-setup export, grid-variant resolution. |
