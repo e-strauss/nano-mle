@@ -94,6 +94,17 @@ A single controller loop chooses one action at a time:
 | `probe` | Fits one configuration (an existing candidate, or a pipeline the writer builds) on the locked folds and reports its fold scores and a preview of its out-of-fold predictions. | No |
 | `stop` | Ends the run. | |
 
+Who decides what, compared with a single-agent harness such as mle-claude:
+
+| Decision | mle-claude | nano-mle |
+|---|---|---|
+| Next action (explore, lock evaluation, expand, probe, stop) | LLM | LLM controller |
+| Which candidate to build on | LLM | search policy (greedy / MCTS / MCGS) |
+| What to change in the experiment | LLM | LLM planner, given the selected node |
+| Writing and fixing code | LLM | LLM writer / repairer |
+| Turning outputs into findings | LLM | LLM interpreter |
+| Scoring and the evaluation lock | harness | harness |
+
 Every implementation runs in a time-bounded subprocess. If it fails, the repairer
 gets the source and traceback and may fix it, up to `--max-repairs` times. A
 repair must keep the planned experiment; a different hypothesis needs a new proposal.
