@@ -242,3 +242,23 @@ def test_choice_outcomes_may_live_in_a_variable_assigned_once():
         with pytest.raises(ValueError, match="outcomes must be a literal"):
             validate_source("import skrub\n\ndef build():\n    models = {}\n    models = {'a': 1}\n"
                             f"    return skrub.choose_from({outcomes}, name='m')\n")
+
+
+def test_estimator_parameters_on_self_may_share_forbidden_names():
+    cls = '''from sklearn.base import BaseEstimator, ClassifierMixin
+
+class Model(BaseEstimator, ClassifierMixin):
+    def __init__(self, subsample=0.8):
+        self.subsample = subsample
+
+    def fit(self, X, y):
+        return self
+
+def build():
+    return Model()
+'''
+    validate_source(cls)
+    with pytest.raises(ValueError, match="Unsupported operation in class"):
+        validate_source(cls.replace("return self\n", "return X.skb.subsample(n=10)\n", 1))
+    with pytest.raises(ValueError, match="Unsupported operation in class"):
+        validate_source(cls.replace("self.subsample = subsample", "self.__dict__['subsample'] = subsample"))

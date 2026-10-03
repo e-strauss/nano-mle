@@ -203,8 +203,11 @@ def validate_source(source):
                                  "(e.g. BaseEstimator, TransformerMixin, nn.Module), no metaclass or decorators")
         if isinstance(node, ast.Attribute):
             if id(node) in in_class:
-                # Estimator internals: fitting, private state and torch's model.eval().
+                # Estimator internals: fitting, private state, torch's model.eval() and
+                # public parameters stored on self (e.g. LightGBM's self.subsample).
+                on_self = isinstance(node.value, ast.Name) and node.value.id == "self"
                 allowed = (node.attr in CLASS_ALLOWED or (node.attr.startswith("_") and not node.attr.startswith("__"))
+                           or (on_self and not node.attr.startswith("_"))
                            or (node.attr == "__init__" and isinstance(node.value, ast.Call)
                                and getattr(node.value.func, "id", "") == "super"))
                 if not allowed and (node.attr.startswith("_") or node.attr in FORBIDDEN):
