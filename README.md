@@ -73,11 +73,48 @@ the configuration it used in its workspace metadata.
 
 | Setting | Default | Effect |
 |---|---|---|
-| `[execution] cpu_threads` | 32 | Cores the workers may use; 0 means all. Workers are pinned to the first `cpu_threads` cores, a hard cap even when a plan sets `n_jobs=-1`; concurrent runs share those cores. OpenMP/BLAS thread counts are set to match. |
+| `[execution] cpu_threads` | 32 | Logical CPUs the workers may use; 0 means all. Workers are pinned to the first `cpu_threads` CPUs the runner may use, a hard cap even when a plan sets `n_jobs=-1`. OpenMP/BLAS thread counts are set to match. See [CPU setup](#cpu-setup-and-parallel-runs). |
 | `[execution] grid_n_jobs` | 1 | Fits run in parallel processes by the grid search; each gets `cpu_threads // grid_n_jobs` threads and its own copy of X and y, so values above 1 only pay off for small data. Probes fit sequentially with all threads. |
 | `[plans] restrict_primitives` | false | Limit `apply_func` to the curated primitives in `graphs.PRIMITIVES`. Disabled for now, so plans may call any library function; plan-defined functions and lambdas are rejected either way. |
 | `[memory.<name>] …` | memory defaults | Parameters of a memory, read at `init` (e.g. `[memory.window] leaderboard = 8`, `[memory.full] max_chars = 400000`). |
 | `[prompts] data_volume_study` | true | Adds the data-volume-study convention for the planner and controller: for large sources, explore which rows and table parts are needed before the lock, and measure a learning curve over training-set size after it. |
+
+### CPU setup and parallel runs
+
+Two layers decide where plan code runs:
+
+1. **How the runner is started.** A process may run on a set of CPUs (its affinity),
+   and children inherit it. Plain `uv run nano-mle run …` may use all CPUs;
+   `taskset -c <cpus> uv run nano-mle run …` restricts the runner and everything it
+   starts.
+2. **The harness.** Each attempt runs in a worker subprocess pinned to the first
+   `cpu_threads` CPUs of that set (`execution.allowed_cores`, `pin`), with OpenMP and
+   BLAS thread counts set to match. The runner itself is not pinned; it mostly waits
+   on model calls.
+
+Set `cpu_threads` to the number of **physical cores** in the set. On a machine with
+two threads per core (check `lscpu` and
+`/sys/devices/system/cpu/cpu0/topology/thread_siblings_list`), two threads on one
+core share its arithmetic units and cache. LightGBM, XGBoost, BLAS and PyTorch gain
+little from the second thread; LightGBM's documentation recommends the physical core
+count. Never give workers more threads than CPUs: OpenMP threads wait for each other
+at every step, so one descheduled thread stalls all of them (two runs sharing 32
+CPUs made LightGBM about 30× slower).
+
+Example machine: 64 logical CPUs, 2 sockets, 16 cores per socket, 2 threads per core.
+CPUs 0–31 are the first thread of each core, and 32–63 their siblings (0 and 32 share
+a core). Socket 0 holds 0–15 and 32–47, socket 1 holds 16–31 and 48–63.
+
+| Setup | Start | `cpu_threads` | Workers use |
+|---|---|---|---|
+| One run (recommended) | `uv run nano-mle run …` | 32 | 0–31: one thread on every core |
+| Two runs, one per socket | `taskset -c 0-15,32-47 uv run nano-mle run …` and `taskset -c 16-31,48-63 uv run nano-mle run …` | 16 | 0–15 and 16–31: one thread per core, memory local to the socket |
+| Two runs without `taskset` | — | any | the same first CPUs: they share cores and stall each other |
+
+Runs are normally sequential; the harness does not coordinate CPUs between runs.
+Start parallel runs with `taskset`, as above. If they need different settings, give
+each its own config file via `NANO_MLE_CONFIG`. A run with fewer cores gets less done
+within a time budget, so compare runs only on the same core layout.
 
 ## Submission
 
