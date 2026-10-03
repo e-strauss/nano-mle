@@ -6,9 +6,11 @@
 # Total CPU threads one attempt may use (BLAS/OpenMP: numpy, LightGBM, XGBoost, torch).
 # 0 means all cores.
 cpu_threads = 32
-# Grid-search variants/folds fitted in parallel. Each parallel fit gets
-# cpu_threads // grid_n_jobs threads. Probes fit folds sequentially with all threads.
-grid_n_jobs = 2
+# Grid-search variants/folds fitted in parallel processes. Each parallel fit gets
+# cpu_threads // grid_n_jobs threads. Every job receives its own copy of X and y,
+# so values above 1 only pay off for small data with many cheap fits. Probes always
+# fit folds sequentially with all threads.
+grid_n_jobs = 1
 
 [plans]
 # Restrict apply_func / call nodes to the curated list of library primitives in

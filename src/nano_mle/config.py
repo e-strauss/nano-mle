@@ -10,7 +10,7 @@ from functools import cache
 from pathlib import Path
 
 DEFAULTS = {
-    "execution": {"cpu_threads": 32, "grid_n_jobs": 2},
+    "execution": {"cpu_threads": 32, "grid_n_jobs": 1},
     "plans": {"restrict_primitives": False},
 }
 
