@@ -482,7 +482,7 @@ function overview(ws: Workspace): Section[] {
 // (artifacts/calls/<id>.input.json) is immutable once written, so sizes are cached.
 const CONTEXT_PARTS: [string, string[]][] = [
   ["explorations", ["recent_explorations", "explorations"]],  // window / full memory
-  ["leaderboard", ["leaderboard"]],
+  ["leaderboard", ["leaderboard", "solutions", "failed_drafts"]],  // aide: solutions
   ["findings", ["findings"]],
   ["task", ["task"]],
   ["probe outputs", ["probe_outputs"]],

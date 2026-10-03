@@ -5,10 +5,22 @@ import math
 from .models import Decision
 
 
+def recent_expansion_s(journal, last=3):
+    """Worker seconds of the latest completed expansions, each summed over its attempts
+    (repairs included). Expansions get slower as a run builds on bigger pipelines, so
+    the recent ones predict the next better than a median over the run."""
+    seconds = {}
+    for attempt in journal.records("attempt"):
+        if attempt.get("wall_s") is not None:
+            seconds[attempt["owner_id"]] = seconds.get(attempt["owner_id"], 0) + attempt["wall_s"]
+    done = [e["id"] for e in journal.records("expansion") if e["status"] != "running" and e["id"] in seconds]
+    return [seconds[e] for e in done[-last:]]
+
+
 class LLM:
     name = "llm"
 
-    def decide(self, context, call):
+    def decide(self, context, call, journal):
         return call("control", context=context)
 
 
@@ -22,18 +34,17 @@ class Auto:
             raise ValueError("time_margin must be finite and non-negative")
         self.time_margin = time_margin
 
-    def decide(self, context, call):
+    def decide(self, context, call, journal):
         counts, budget = context["counts"], context["budget"]
         for kind in ("expansions", "evaluations"):
             if counts[kind] >= budget[f"max_{kind}"]:
                 return Decision(action="stop", reason=f"auto: {kind.capitalize()} budget exhausted")
         if context["contract"] is None:
             return call("control", context=context)
-        timing = context["time"]
-        remaining = timing["remaining_s"]
-        typical = timing["typical_attempt_s"].get("expansion")
+        remaining = context["time"]["remaining_s"]
+        recent = recent_expansion_s(journal)
         if remaining is not None and (remaining <= 0 or
-                (typical is not None and remaining < self.time_margin * typical)):
+                (recent and remaining < self.time_margin * max(recent))):
             return Decision(action="stop", reason="auto: insufficient time for another expansion")
         parent = context["next_expansion_parent"]
         if parent["id"] == "root":

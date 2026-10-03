@@ -3,19 +3,34 @@ import json
 import pandas as pd
 import pytest
 
-from nano_mle.controllers import Auto, LLM
+from nano_mle.controllers import Auto, LLM, recent_expansion_s
 from nano_mle.models import Budget, Decision, Proposal, Task
 from nano_mle.runner import Runner, initialize
 from nano_mle.store import Store
 from scripted import ScriptedBackend
 
 
-def context(parent="root", remaining=None, typical=None, **budget):
+def context(parent="root", remaining=None, **budget):
     return {"contract": {"id": "locked"}, "counts": {"expansions": 0, "evaluations": 0},
             "budget": Budget(**budget).model_dump(),
             "next_expansion_parent": {"id": parent},
-            "time": {"remaining_s": remaining, "typical_attempt_s":
-                     {} if typical is None else {"expansion": typical}}}
+            "time": {"remaining_s": remaining, "typical_attempt_s": {}}}
+
+
+class History:
+    """Journal stub: completed expansions with the given attempt seconds each."""
+
+    def __init__(self, *expansions, running=()):
+        self.data = {"expansion": [], "attempt": []}
+        for i, attempts in enumerate([*expansions, *running]):
+            self.data["expansion"].append({"id": f"e{i}", "status": "running" if i >= len(expansions) else "ok"})
+            self.data["attempt"] += [{"owner_id": f"e{i}", "wall_s": s} for s in attempts]
+
+    def records(self, kind):
+        return self.data[kind]
+
+
+EMPTY = History()
 
 
 def no_model(*args, **kwargs):
@@ -30,8 +45,8 @@ def test_controllers_delegate_before_lock_and_llm_always_delegates():
         return Decision(action="explore", reason="bootstrap", question="q", stopping_condition="done")
 
     before_lock = {**context(), "contract": None}
-    assert Auto().decide(before_lock, call).action == "explore"
-    assert LLM().decide(context(), call).action == "explore"
+    assert Auto().decide(before_lock, call, EMPTY).action == "explore"
+    assert LLM().decide(context(), call, EMPTY).action == "explore"
     assert calls == [("control", {"context": before_lock}), ("control", {"context": context()})]
 
 
@@ -39,31 +54,41 @@ def test_controllers_delegate_before_lock_and_llm_always_delegates():
 def test_auto_stops_at_search_budgets(kind):
     current = context()
     current["counts"][kind] = current["budget"][f"max_{kind}"]
-    decision = Auto().decide(current, no_model)
+    decision = Auto().decide(current, no_model, EMPTY)
     assert decision.action == "stop" and kind.capitalize() in decision.reason
 
 
 def test_auto_directions_follow_the_selected_parent():
     draft_context = context(max_requested_explorations=0)
     draft_context["next_expansion_parent"].update(draft_number=3, num_drafts=5)
-    draft = Auto().decide(draft_context, no_model)
+    draft = Auto().decide(draft_context, no_model, EMPTY)
     assert draft.action == "expand" and "draft 3/5" in draft.reason
     assert "different from the existing drafts" in draft.reason
     assert "do not request exploration" in draft.reason
     # A root chosen by any other policy still gets a draft direction.
-    assert "auto: draft:" in Auto().decide(context(), no_model).reason
-    improve = Auto().decide(context(parent="winner"), no_model)
+    assert "auto: draft:" in Auto().decide(context(), no_model, EMPTY).reason
+    improve = Auto().decide(context(parent="winner"), no_model, EMPTY)
     assert "auto: improve:" in improve.reason and "one change" in improve.reason
     assert "do not request exploration" not in improve.reason
 
 
-@pytest.mark.parametrize("remaining,typical,margin,action", [
-    (9, 10, 1, "stop"), (10, 10, 1, "expand"), (15, 10, 2, "stop"),
-    (1, None, 1, "expand"), (None, 10, 1, "expand"), (1, 10, 0, "expand"),
-    (0, None, 0, "stop"),
+@pytest.mark.parametrize("remaining,history,margin,action", [
+    (9, History([10]), 1, "stop"), (10, History([10]), 1, "expand"), (15, History([10]), 2, "stop"),
+    (1, EMPTY, 1, "expand"), (None, History([10]), 1, "expand"), (1, History([10]), 0, "expand"),
+    (0, EMPTY, 0, "stop"),
+    # Repairs add up: two attempts of 6s make an expansion of 12s.
+    (11, History([6, 6]), 1, "stop"),
+    # Growing durations: the run's median (594s) would allow it, the recent maximum does not.
+    (1000, History([92], [179], [271], [917], [1247], [1552]), 1, "stop"),
 ])
-def test_auto_time_cutoff(remaining, typical, margin, action):
-    assert Auto(margin).decide(context(remaining=remaining, typical=typical), no_model).action == action
+def test_auto_time_cutoff(remaining, history, margin, action):
+    assert Auto(margin).decide(context(remaining=remaining), no_model, history).action == action
+
+
+def test_recent_expansion_seconds_cover_the_last_three_completed_expansions():
+    history = History([1], [2, 3], [4], [5], running=[[100]])
+    assert recent_expansion_s(history) == [5, 4, 5]
+    assert recent_expansion_s(History([], [7])) == [7]  # planner failures have no attempts
 
 
 @pytest.mark.parametrize("margin", [-1, float("inf"), float("nan")])
@@ -185,10 +210,12 @@ def test_auto_time_stop_reaches_the_journal_without_a_rejected_action(tmp_path, 
     runner = Runner(root, ExperimentBackend())
     runner.store.set_meta("contract", {"id": "locked", "spec": {}, "rows": 18,
                                       "fold_fingerprint": "folds", "setup_source": ""})
-    monkeypatch.setattr(runner, "time_context", lambda: context(remaining=9, typical=10)["time"])
+    runner.store.put("expansion", {"id": "expansion_done", "status": "ok", "parent_id": "root"})
+    runner.store.put("attempt", {"id": "attempt_done", "owner_id": "expansion_done", "status": "ok", "wall_s": 10})
+    monkeypatch.setattr(runner, "time_context", lambda: context(remaining=9)["time"])
     try:
         runner.search()
-        assert runner.store.records("expansion") == []
+        assert len(runner.store.records("expansion")) == 1
         assert runner.store.records("model_call") == []
         assert events(runner.store, "controller_decision")[0]["action"] == "stop"
         assert "insufficient time" in events(runner.store, "stopped")[0]["reason"]

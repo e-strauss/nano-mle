@@ -134,7 +134,8 @@ class Full:
 
 
 class Aide:
-    """Chronological solution summaries, with evidence for evaluation preparation.
+    """Chronological solution summaries (`solutions`, in creation order, not ranked) and
+    failed drafts, with evidence for evaluation preparation.
 
     The harness supplies the selected parent's source and the current repair error;
     this memory does not include candidate code or historical failure traces.
@@ -149,9 +150,19 @@ class Aide:
         self.ask = None
 
     def view(self, role, journal, query=None, parent_id=None):
-        return {"leaderboard": [{k: c.get(k) for k in
-                                 ("id", "description", "configuration_description", "score")}
-                                for c in valid(journal.records("candidate"))],
+        # Drafts are the solutions whose parent is root; failed drafts are listed so a
+        # new draft does not repeat an approach that already failed.
+        failed_drafts = []
+        for e in journal.records("expansion"):
+            description = (e.get("proposal") or {}).get("description")
+            if e["parent_id"] == "root" and e["status"] in ("failed", "rejected") and description:
+                error = (e.get("result") or {}).get("error") or e.get("error") or ""
+                failed_drafts.append({"id": e["id"], "description": description,
+                                      "error": " ".join(str(error).split())[:300]})
+        return {"solutions": [{k: c.get(k) for k in
+                               ("id", "parent_id", "description", "configuration_description", "score")}
+                              for c in valid(journal.records("candidate"))],
+                "failed_drafts": failed_drafts,
                 "findings": active_findings(journal),
                 "recent_explorations": (journal.records("exploration")[-self.explorations:]
                                         if self.explorations else []),

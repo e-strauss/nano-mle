@@ -63,11 +63,19 @@ def test_aide_memory_keeps_chronological_summaries_and_bootstrap_evidence(tmp_pa
                                     "description": id, "configuration_description": {"alpha": 1},
                                     "source_path": "hidden.py", "fold_scores": [score]})
         store.put("candidate", {"id": "failed", "status": "failed", "score": None})
+        store.put("expansion", {"id": "draft_failed", "parent_id": "root", "status": "failed",
+                                "proposal": {"description": "Tried a wide network"},
+                                "result": {"error": "Worker\n  timed out"}})
+        store.put("expansion", {"id": "draft_unplanned", "parent_id": "root", "status": "failed",
+                                "error": "Planner exceeded requested exploration limit"})
         view = Aide(explorations=1).view("plan", Journal(store))
-        assert [c["id"] for c in view["leaderboard"]] == [
+        assert [c["id"] for c in view["solutions"]] == [
             c["id"] for c in store.records("candidate") if c["status"] == "ok"]
-        assert all(set(c) == {"id", "description", "configuration_description", "score"}
-                   for c in view["leaderboard"])
+        assert all(set(c) == {"id", "parent_id", "description", "configuration_description", "score"}
+                   for c in view["solutions"])
+        # Only failed drafts with a proposal are shown; failed improvements are not.
+        assert view["failed_drafts"] == [{"id": "draft_failed", "description": "Tried a wide network",
+                                          "error": "Worker timed out"}]
         assert view["findings"] and len(view["recent_explorations"]) == 1
         assert "trajectory" not in view and "recent_failures" not in view
         assert Aide(explorations=0).view("plan", Journal(store))["recent_explorations"] == []

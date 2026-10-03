@@ -11,8 +11,10 @@ PRESETS = {"aide": {"controller": "auto", "policy": "draft-greedy", "memory": "a
 
 def resolve_settings(args):
     """Existing defaults, then the preset, then explicitly supplied init flags."""
+    from .models import Budget
+
     defaults = {"controller": "llm", "policy": "greedy", "memory": "window",
-                "max_requested_explorations": 2}
+                "max_requested_explorations": Budget.model_fields["max_requested_explorations"].default}
     defaults.update(PRESETS.get(args.preset, {}))
     return {key: getattr(args, key) if getattr(args, key) is not None else value
             for key, value in defaults.items()}

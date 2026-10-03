@@ -81,7 +81,7 @@ the configuration it used in its workspace metadata.
 | `[plans] restrict_primitives` | false | Limit `apply_func` to the curated primitives in `graphs.PRIMITIVES`. Disabled for now, so plans may call any library function; plan-defined functions and lambdas are rejected either way. |
 | `[memory.<name>] …` | memory defaults | Parameters of a memory, read at `init` (e.g. `[memory.window] leaderboard = 8`, `[memory.full] max_chars = 400000`). |
 | `[policy.<name>] …` | policy defaults | Parameters saved at `init`: draft count, UCT exploration coefficient or MCGS seed. |
-| `[controller.auto] time_margin` | 1.0 | Auto stops when the remaining time is less than this factor times the median expansion worker duration. 0 disables the estimate. |
+| `[controller.auto] time_margin` | 1.0 | Auto stops when the remaining time is less than this factor times the longest of the last 3 expansions' worker time (repairs included). 0 disables the estimate. |
 | `[prompts] data_volume_study` | true | Adds the data-volume-study convention for the planner and controller: for large sources, explore which rows and table parts are needed before the lock, and measure a learning curve over training-set size after it. |
 
 ### Agent configurations
@@ -99,7 +99,7 @@ The `aide` preset selects `auto`, `draft-greedy`, `aide` memory, and
 
 ```bash
 uv run nano-mle init workspaces/aide-run --task task.json --preset aide \
-  --max-expansions 20 --max-evaluations 80 --max-model-calls 160 \
+  --max-expansions 20 --max-evaluations 80 --max-actions 40 --max-model-calls 160 \
   --execution-timeout 1800 --time-budget 8h
 uv run nano-mle run workspaces/aide-run --model openai/gpt-6.1-sol
 ```
@@ -120,9 +120,9 @@ the original policy defaults. `workspace.json` and the report expose the choices
 automatic decisions use the usual `controller_decision` journal events.
 
 Auto stops at the expansion/evaluation limits, and can stop early using
-`[controller.auto] time_margin`. The time estimate uses past worker durations,
-excluding model calls and cumulative repairs, so it cannot guarantee the next
-expansion fits. With no expansion history, the first one is allowed; existing
+`[controller.auto] time_margin`. The estimate is the longest worker time of the
+last 3 expansions, repairs included, since expansions get slower as pipelines grow.
+It excludes model calls, so it cannot guarantee the next expansion fits. With no expansion history, the first one is allowed; existing
 worker timeouts still bound it. Action, model-call and wall-time budgets can end a
 run before its expansion limit.
 
@@ -136,6 +136,9 @@ search steps; our `max_repairs` limits repairs inside one expansion and is not a
 equivalent setting. Grids create several candidates per expansion, so choose an
 evaluation budget large enough for them. The preset disables planner-requested
 explorations; a request is rejected and its failed expansion still counts.
+`[prompts] data_volume_study` is a prompt setting, not part of the preset; its
+learning-curve convention can take up a draft, so disable it in a separate config
+for runs meant to be closer to AIDE.
 
 ### CPU setup and parallel runs
 
@@ -276,7 +279,7 @@ class Memory(Protocol):
 |---|---|
 | `window` (default) | the best 8 candidates, the last 4 explorations with their output previews, the last 4 failures, all active findings, all probe outputs, the parent's last 6 ancestors |
 | `full` | everything recorded: all candidates, failures, explorations, findings (superseded ones flagged), probes and the whole lineage, up to `max_chars` of JSON (default 400,000); beyond it the oldest explorations, then the oldest failures, then the lowest-ranked candidates are omitted and counted |
-| `aide` | every valid candidate's id, description, configuration description and score, in creation order; active findings, the last 4 exploration previews and probe outputs preserve evidence for evaluation preparation or an LLM controller. No candidate code, failure history or ancestry is included; the harness still supplies the selected parent's source and current repair traceback. Candidate summaries grow with the run. |
+| `aide` | `solutions`: every valid candidate's id, parent, description, configuration description and score, in creation order (not ranked); `failed_drafts`: failed root expansions with their proposal and error; active findings, the last 4 exploration previews and probe outputs preserve evidence for evaluation preparation or an LLM controller. No candidate code, other failures or ancestry are included; the harness still supplies the selected parent's source and current repair traceback. Candidate summaries grow with the run. |
 
 With `window`, the context grows early and then levels off; only findings grow
 without bound.

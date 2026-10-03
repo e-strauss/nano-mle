@@ -492,7 +492,8 @@ class Runner:
                 return
             self.store.set_meta("actions", self.counts()["actions"] + 1)
             decision = self.controller.decide(self.context(
-                "control", extra={"next_expansion_parent": self.next_parent_context()}), self.call)
+                "control", extra={"next_expansion_parent": self.next_parent_context()}), self.call,
+                Journal(self.store))
             self.store.event("controller_decision", **decision.model_dump())
             if decision.action == "stop":
                 self.store.event("stopped", reason=decision.reason)
