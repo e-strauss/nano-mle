@@ -56,6 +56,10 @@ export type Section =
 
 export type ScorePoint = { node: string; order: number; score: number | null; label: string };
 
+// Size of the controller's input per control call, split into named parts
+// (characters of JSON). parts[i] labels sizes[i]; the last part is the remainder.
+export type ContextSizes = { parts: string[]; points: { order: number; time: number; sizes: number[] }[] };
+
 export type RunDetail = {
   summary: RunSummary;
   nodes: GraphNode[];
@@ -63,6 +67,7 @@ export type RunDetail = {
   events: TimelineEvent[];
   scores: ScorePoint[];     // scored nodes in evaluation order (null = failed)
   overview: Section[];
+  context?: ContextSizes;
 };
 
 export interface Adapter {

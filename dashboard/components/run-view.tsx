@@ -4,6 +4,7 @@ import { useEffect, useState, useTransition } from "react";
 import { getNode, stopRun } from "@/app/actions/runs";
 import { clock } from "@/lib/format";
 import type { RunDetail, Section } from "@/lib/types";
+import ContextChart from "./context-chart";
 import ScoreChart from "./score-chart";
 import { SectionView } from "./sections";
 import TreeView from "./tree-view";
@@ -35,6 +36,12 @@ export default function RunView({ detail }: { detail: RunDetail }) {
           <h2>Score progress</h2>
           <ScoreChart points={detail.scores} onSelect={setSelected} />
         </section>
+        {detail.context && (
+          <section>
+            <h2>Controller context</h2>
+            <ContextChart data={detail.context} />
+          </section>
+        )}
         <section>
           <h2>Run overview</h2>
           <div className="panel">

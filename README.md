@@ -130,7 +130,7 @@ are stateless calls that see what the harness passes them:
 
 The controller's context is rebuilt from the journal on every call. Most parts are
 windows, so it grows early and then levels off; only findings grow without bound.
-Example: the last control call of a 4 h Gemini forest-cover run, after 9 expansions:
+Example: a control call of a 4 h Gemini forest-cover run, after 8 expansions:
 
 | Part | Size | Bound |
 |---|---|---|
@@ -142,8 +142,9 @@ Example: the last control call of a 4 h Gemini forest-cover run, after 9 expansi
 | Locked evaluation source | 1.5 KB | fixed |
 | Next parent, time, budgets, counts, sources | 2.5 KB | fixed |
 
-Over that run the context went 8 KB (first call) → 41 KB (evaluation locked) →
-62 KB (after 3 expansions) → 66 KB (after 9), about 16k tokens.
+Over that run the context went 7 KB (first call) → 34 KB (evaluation locked) →
+51 KB (after 3 expansions) → 55 KB (after 8), about 14k tokens. The dashboard plots
+this per control call, stacked by part.
 
 Every implementation runs in a time-bounded subprocess. If it fails, the repairer
 gets the source and traceback and may fix it, up to `--max-repairs` times. A

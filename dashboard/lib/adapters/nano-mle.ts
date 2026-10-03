@@ -4,7 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { argValue, cmdline, lockHolder } from "../procs";
 import type {
-  Adapter, Budget, FileRef, GraphEdge, GraphNode, NodeStatus, RunDetail, RunState, RunSummary,
+  Adapter, Budget, ContextSizes, FileRef, GraphEdge, GraphNode, NodeStatus, RunDetail, RunState, RunSummary,
   ScorePoint, Section, TimelineEvent,
 } from "../types";
 
@@ -461,6 +461,50 @@ function overview(ws: Workspace): Section[] {
   ];
 }
 
+// The controller's input is rebuilt from the journal on every call; its transcript
+// (artifacts/calls/<id>.input.json) is immutable once written, so sizes are cached.
+const CONTEXT_PARTS: [string, string[]][] = [
+  ["recent explorations", ["recent_explorations"]],
+  ["leaderboard", ["leaderboard"]],
+  ["findings", ["findings"]],
+  ["task", ["task"]],
+  ["probe outputs", ["probe_outputs"]],
+  ["evaluation", ["contract", "locked_evaluation_source"]],
+];
+const contextCache = new Map<string, number[]>();
+
+// Length of v as Python's json.dumps writes it (", " and ": " separators), which is
+// how the harness sends the context to the model.
+function pyJsonSize(v: unknown): number {
+  if (Array.isArray(v)) return 2 + v.reduce((n: number, x) => n + pyJsonSize(x), 0) + 2 * Math.max(0, v.length - 1);
+  if (v && typeof v === "object") {
+    const entries = Object.entries(v);
+    return 2 + entries.reduce((n, [k, x]) => n + JSON.stringify(k).length + 2 + pyJsonSize(x), 0)
+      + 2 * Math.max(0, entries.length - 1);
+  }
+  return (JSON.stringify(v) ?? "null").length;
+}
+
+function contextSizes(ws: Workspace): ContextSizes {
+  const started = new Map(ws.events.filter((e) => e.kind === "model_call_started")
+    .map((e) => [e.payload.id, e.time]));
+  const points = ws.of("model_call").filter((c) => c.method === "control").flatMap((c, i) => {
+    const file = path.join(ws.dir, "artifacts", "calls", `${c.id}.input.json`);
+    let sizes = contextCache.get(file);
+    if (!sizes) {
+      const context = readJson(file)?.inputs?.context;
+      if (!context || typeof context !== "object") return [];
+      const size = (k: string) => (k in context ? pyJsonSize(context[k]) : 0);
+      const named = new Set(CONTEXT_PARTS.flatMap(([, keys]) => keys));
+      sizes = [...CONTEXT_PARTS.map(([, keys]) => keys.reduce((n, k) => n + size(k), 0)),
+        Object.keys(context).filter((k) => !named.has(k)).reduce((n, k) => n + size(k), 0)];
+      contextCache.set(file, sizes);
+    }
+    return [{ order: i + 1, time: started.get(c.id) ?? 0, sizes }];
+  });
+  return { parts: [...CONTEXT_PARTS.map(([name]) => name), "other"], points };
+}
+
 export const nanoMle: Adapter = {
   name: "nano-mle",
   detect(dir) {
@@ -478,7 +522,8 @@ export const nanoMle: Adapter = {
     const events: TimelineEvent[] = ws.events
       .filter((e) => e.kind !== "model_call_started")
       .map((e) => ({ time: e.time, kind: e.kind, text: eventText(e.kind, e.payload) }));
-    return { summary: summarize(ws, id), nodes, edges, events, scores, overview: overview(ws) };
+    return { summary: summarize(ws, id), nodes, edges, events, scores, overview: overview(ws),
+      context: contextSizes(ws) };
   },
   node(dir, nodeId) {
     return nodeSections(new Workspace(dir), nodeId);
