@@ -22,3 +22,13 @@ def test_reasoning_effort_is_passed_through():
     assert "reasoning_effort" not in lm_settings("gemini/gemini-3.8-flash", 6000)
     assert lm_settings("openai/gpt-6.1-sol", 6000)["reasoning_effort"] == "low"
     assert lm_settings("openai/gpt-6.1-sol", 6000, reasoning_effort="high")["reasoning_effort"] == "high"
+
+
+def test_bare_plan_code_is_accepted_as_the_writer_answer():
+    from nano_mle.agents import bare_source
+
+    code = "import skrub\n\ndef build():\n    return {}\n"
+    assert bare_source(code) == code.strip()
+    assert bare_source("```python\n" + code + "```") == code.strip()
+    assert bare_source(code + "\n[[ ## completed ## ]]") == code.strip()
+    assert bare_source("I cannot help with that.") is None

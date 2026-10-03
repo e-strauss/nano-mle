@@ -1,6 +1,7 @@
 """DSPy backend. Importing the package never configures or calls a language model."""
 
 import json
+import re
 from typing import Protocol
 
 from .models import Decision, Finding, Proposal
@@ -18,6 +19,14 @@ def lm_settings(model: str, max_tokens: int, timeout: int = 180, reasoning_effor
         # LiteLLM maps reasoning_effort to the provider's thinking budget (e.g. Gemini).
         settings["reasoning_effort"] = reasoning_effort
     return settings
+
+
+def bare_source(response):
+    """Plan code answered without the adapter's field marker (seen with Gemini). The
+    writer and repairer have a single output field, so bare code is their answer."""
+    text = re.sub(r"\[\[ ## \w+ ## \]\]", "", response).strip()
+    text = re.sub(r"^```(?:python)?\s*\n|\n```\s*$", "", text)
+    return text if "def build" in text else None
 
 
 class Backend(Protocol):
@@ -101,12 +110,23 @@ class DSPyBackend:
     def plan(self, context):
         return Proposal.model_validate(self._call(self.planner, context=context).proposal)
 
+    def _code(self, module, field, **kwargs):
+        from dspy.utils.exceptions import AdapterParseError
+
+        try:
+            return getattr(self._call(module, **kwargs), field)
+        except AdapterParseError as error:
+            source = bare_source(error.lm_response)
+            if source is None:
+                raise
+            return source
+
     def implement(self, kind, context, intent):
-        return self._call(self.writer, kind=kind, context=context, intent=intent).source
+        return self._code(self.writer, "source", kind=kind, context=context, intent=intent)
 
     def repair(self, kind, context, intent, source, error):
-        return self._call(self.repairer, kind=kind, context=context, intent=intent,
-                          source=source, error=error).fixed_source
+        return self._code(self.repairer, "fixed_source", kind=kind, context=context, intent=intent,
+                          source=source, error=error)
 
     def interpret(self, context, question, result):
         return [Finding.model_validate(f) for f in self._call(self.interpreter, context=context,
