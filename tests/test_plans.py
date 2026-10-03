@@ -230,3 +230,15 @@ def test_plans_read_only_task_sources(tmp_path):
             check_reads([reused], sources)
         with pytest.raises(ValueError, match="read only task sources"):
             check_reads([skrub.as_data_op("gs://other/x.parquet").skb.apply_func(pd.read_parquet)], sources)
+
+
+def test_choice_outcomes_may_live_in_a_variable_assigned_once():
+    source = ("import skrub\nfrom sklearn.linear_model import Ridge\n\ndef build():\n"
+              "    models = {'weak': Ridge(alpha=10.0), 'strong': Ridge(alpha=0.1)}\n"
+              "    return skrub.choose_from(models, name='model')\n")
+    resolved = resolve_source(source, {"model": 1})
+    assert "choose_from" not in resolved and "alpha=0.1" in resolved
+    for outcomes in ("make_models()", "models", "{**models}"):
+        with pytest.raises(ValueError, match="outcomes must be a literal"):
+            validate_source("import skrub\n\ndef build():\n    models = {}\n    models = {'a': 1}\n"
+                            f"    return skrub.choose_from({outcomes}, name='m')\n")

@@ -224,6 +224,10 @@ def validate_source(source):
                                      "dict) first; the name is not positional")
                 if names[0].value in choice_names:
                     raise ValueError("Choice names must be unique")
+                if choice_outcomes(node, tree) is None:
+                    raise ValueError(f"choose_from {names[0].value!r}: outcomes must be a literal list or dict, "
+                                     "inline or in a variable assigned once, so children can resolve the "
+                                     "selected variant")
                 choice_names.add(names[0].value)
         if isinstance(node, ast.Assign):
             # Dictionary construction is allowed in graph-building helpers.
@@ -267,6 +271,24 @@ def evaluation_source(source):
     return ast.unparse(tree) + "\n"
 
 
+LITERAL_OUTCOMES = (ast.List, ast.Tuple, ast.Dict)
+
+
+def choice_outcomes(node, tree):
+    """The literal outcomes of a choose_from call: written inline, or a variable assigned
+    exactly once to a literal list, tuple or dict. None when they cannot be resolved."""
+    values = node.args[0] if node.args else next((k.value for k in node.keywords if k.arg == "outcomes"), None)
+    if isinstance(values, ast.Name):
+        assigned = [a.value for a in ast.walk(tree) if isinstance(a, ast.Assign)
+                    and any(isinstance(t, ast.Name) and t.id == values.id for t in a.targets)]
+        values = assigned[0] if len(assigned) == 1 else None
+    if not isinstance(values, LITERAL_OUTCOMES):
+        return None
+    if isinstance(values, ast.Dict):
+        return None if None in values.keys else values.values  # no **unpacking
+    return None if any(isinstance(e, ast.Starred) for e in values.elts) else values.elts
+
+
 def resolve_source(source, configuration):
     tree = validate_source(source)
 
@@ -276,9 +298,7 @@ def resolve_source(source, configuration):
             if name == "choose_from":
                 choice = next(k.value.value for k in node.keywords if k.arg == "name")
                 if choice in configuration:
-                    values = node.args[0]
-                    outcomes = values.values if isinstance(values, ast.Dict) else values.elts
-                    return self.visit(outcomes[int(configuration[choice])])
+                    return self.visit(choice_outcomes(node, tree)[int(configuration[choice])])
             return self.generic_visit(node)
 
     return ast.unparse(ast.fix_missing_locations(Resolve().visit(tree))) + "\n"
