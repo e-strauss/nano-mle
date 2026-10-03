@@ -96,9 +96,9 @@ A single controller loop chooses one action at a time:
 
 | Action | What happens | Scored? |
 |---|---|---|
-| `explore` | The writer produces a graph answering a concrete question; outputs are evaluated and an interpreter turns them into scoped findings. | No |
+| `explore` | The writer produces a graph answering a concrete question; outputs are evaluated and an interpreter turns them into scoped findings. It may fit models for quick evidence, but never produces candidates. | No |
 | `establish_evaluation` | The writer constructs the modelling population, raw labels, CV and scorer. The harness audits and locks them. | No |
-| `expand` | The search policy selects a parent; the planner proposes a bounded change (or requests an exploration first); the writer implements it; every grid variant is scored. | Yes |
+| `expand` | The search policy selects a parent; the planner proposes a bounded change (or requests an exploration first); the writer implements it; every grid variant is scored and becomes its own candidate (`<expansion>_variant_N`, shown as v1, v2, …), which later expansions can select as a parent with its grid values resolved. | Yes |
 | `probe` | Fits one configuration (an existing candidate, or a pipeline the writer builds) on the locked folds and reports its fold scores and a harness-computed error summary of its out-of-fold predictions. | No |
 | `stop` | Ends the run. | |
 

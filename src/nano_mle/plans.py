@@ -27,6 +27,9 @@ Plan contract (checked by the harness):
   custom estimator or transformer class (sklearn API, defining fit) only when the
   step needs fitted state or is a genuinely new model, e.g. a torch network.
 - Exploration returns a dict of named DataOps; all are evaluated in one pass.
+  Explorations produce findings, never candidates. They may fit models for quick
+  evidence (own splits or subsamples, setups the lock does not allow), e.g. inside a
+  custom estimator; such numbers are not comparable with candidate scores.
 - Evaluation setup returns {'X', 'y', 'scoring', optional 'row_keys', optional
   'audit' (a DataOp or dict of named DataOps)}: X marked with
   mark_as_X(cv=..., split_kwargs=...) and the raw y marked with mark_as_y(). scoring is a sklearn scorer string or a plain function
@@ -55,8 +58,8 @@ Plan contract (checked by the harness):
   FORMAT's columns. No CV, no choose_from, no scoring.
 - Named skrub.choose_from grids become one candidate per variant (within the
   evaluation budget). Children receive the parent's resolved configuration.
-- Return code without markdown fences. No credentials, no manual fitting or scoring,
-  no caching.
+- Return code without markdown fences. No credentials, no caching. Pipelines and
+  probes never fit or score manually: the harness scores them on the locked folds.
 
 Skrub and library notes (exact signatures; do not guess other keywords):
 - a.skb.concat([b, c], axis=0) takes only a list and axis; no ignore_index. It works on

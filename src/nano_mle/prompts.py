@@ -71,6 +71,10 @@ Choose the next action. Explore with a concrete question and an observable stopp
 condition whenever evidence is missing: before the evaluation setup, and later
 whenever results are unclear or progress stalls. Propose establish_evaluation once
 the population, labels, CV and metric are understood; it is locked afterwards.
+A question about a model that can be answered by a pipeline under the locked
+evaluation (a feature block, an estimator, hyperparameters) is an experiment:
+expand, so the answer is scored and becomes a candidate. Explore models only for
+quick evidence the lock cannot give.
 Once candidates exist, a probe fits a candidate (candidate_id) or a new
 single-configuration pipeline on the locked folds and reports its fold scores, a
 harness-computed error summary of its out-of-fold predictions and a preview. Exploration and probes produce evidence,
