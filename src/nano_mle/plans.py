@@ -44,6 +44,15 @@ Plan contract (checked by the harness):
   The harness fits it on the locked folds and reports its fold scores, an error
   summary of its out-of-fold predictions (per-class recall and confusion, calibration
   by decile, or error quantiles) and a preview. Probes are evidence, not candidates.
+- A final plan turns a scored candidate (its resolved source is given) into a
+  submission; it is fitted once and never scored. Keep the candidate's features and
+  model, but read the rows that change between fitting and predicting through a
+  skrub.var holding a path, e.g. skrub.var("rows").skb.apply_func(pd.read_csv), and
+  define FIT and PREDICT dicts mapping each var name to a task source path, plus
+  FORMAT (the sample submission path, or None). Mark y as usual; drop columns missing
+  at prediction time (the target) with errors="ignore". build() returns
+  {'submission': DataOp}: the predictions formatted as the submission table, with
+  FORMAT's columns. No CV, no choose_from, no scoring.
 - Named skrub.choose_from grids become one candidate per variant (within the
   evaluation budget). Children receive the parent's resolved configuration.
 - Return code without markdown fences. No credentials, no manual fitting or scoring,

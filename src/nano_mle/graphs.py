@@ -111,25 +111,26 @@ def _looks_like_path(text):
         return False
 
 
+def is_source(text, sources):
+    """Whether a path or URL is a task source or lies inside a source directory."""
+    allowed = [str(s["path"]) for s in sources.values()]
+    if "://" in text:
+        return any(text == a or text.startswith(a.rstrip("/") + "/") for a in allowed)
+    resolved = Path(text).expanduser().resolve()
+    return any(resolved == Path(a) or Path(a) in resolved.parents for a in allowed if "://" not in a)
+
+
 def check_reads(plans, sources):
     """Every file or URL a plan names must be a task source (or lie inside a source
     directory). Files written by earlier steps are never inputs: recompute instead."""
     from skrub._data_ops._evaluation import graph
-
-    allowed = [str(s["path"]) for s in sources.values()]
-
-    def is_source(text):
-        if "://" in text:
-            return any(text == a or text.startswith(a.rstrip("/") + "/") for a in allowed)
-        resolved = Path(text).expanduser().resolve()
-        return any(resolved == Path(a) or Path(a) in resolved.parents for a in allowed if "://" not in a)
 
     for plan in plans:
         for node in graph(plan)["nodes"].values():
             impl = node._skrub_impl
             for field in impl._fields:
                 for text in _strings(getattr(impl, field)):
-                    if _looks_like_path(text) and not is_source(text):
+                    if _looks_like_path(text) and not is_source(text, sources):
                         raise ValueError(f"Plans read only task sources; {text!r} is not one. Files written "
                                          "by earlier steps are not inputs: recompute what you need in the plan")
 

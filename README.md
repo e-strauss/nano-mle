@@ -82,6 +82,20 @@ the configuration it used in its workspace metadata.
 | `[plans] restrict_primitives` | false | Limit `apply_func` to the curated primitives in `graphs.PRIMITIVES`. Disabled for now, so plans may call any library function; plan-defined functions and lambdas are rejected either way. |
 | `[prompts] data_volume_study` | true | Adds the data-volume-study convention for the planner and controller: for large sources, explore which rows and table parts are needed before the lock, and measure a learning curve over training-set size after it. |
 
+## Submission
+
+`nano-mle submit WORKSPACE --model MODEL [--candidate ID] [--task TASK.json]` runs after
+the search, like mle-claude's ml-submit skill. The harness takes the best candidate
+(or the named one) and resolves its winning grid variant. One writer call (with
+repairs) re-roots the plan so it can be applied to new rows: rows that differ between
+fitting and predicting are read through `skrub.var` holding a path, bound by the
+plan's `FIT` and `PREDICT` dicts. The harness fits once on `FIT`, predicts on
+`PREDICT`, checks columns, keys and row count against `FORMAT` (the sample
+submission) and writes `submission/<id>/attempt_*/submission.csv`. The writer sees
+the first lines of each text source. `--task` passes an updated task file that adds
+the prediction rows and the sample submission as sources. Submissions are never
+scored and never become candidates.
+
 ## How a run works
 
 A single controller loop chooses one action at a time:
@@ -284,7 +298,7 @@ still shows which phase was running.
 
 | File | Role |
 |---|---|
-| `cli.py` | Entry point: `init`, `run`, `show`, `draw`, `demo`. |
+| `cli.py` | Entry point: `init`, `run`, `submit`, `show`, `draw`, `demo`. |
 | `runner.py` | Controller loop, budgets, repair loop, exploration/setup/expansion, report export, resume. |
 | `agents.py` | DSPy backend: controller, planner, writer, repairer and interpreter signatures. |
 | `prompts.py` | Instructions for the controller, planner and writer. |
@@ -300,6 +314,7 @@ still shows which phase was running.
 | `config.py` | Loads `nano-mle.toml` (threads, grid parallelism, plan checks). |
 | `timing.py` | Phase timer for workers. |
 | `libraries.py` | Repository-level record of imported-but-missing libraries. |
+| `submit.py` | `nano-mle submit`: final refit of a candidate, prediction on new rows, format checks. |
 | `draw.py` | `nano-mle draw ATTEMPT`: rebuilds a recorded plan lazily and prints its Skrub `draw_graph` SVG. |
 | `demo.py` | Scripted offline backend. |
 

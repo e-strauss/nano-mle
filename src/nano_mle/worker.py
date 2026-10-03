@@ -19,7 +19,7 @@ from sklearn.model_selection import ParameterGrid
 from .config import grid_n_jobs
 from .contracts import ContractDrift, contract_folds, save_folds, verify_contract
 from .evaluation import audit_boundary
-from .graphs import check_reads, validate_graph
+from .graphs import check_reads, is_source, validate_graph
 from .plans import validate_source
 from .timing import Phases
 
@@ -235,6 +235,59 @@ def probe(result, contract, request, directory, phases, started, keys=None):
                       "summary": error_summary(table)}}
 
 
+def read_table(path):
+    return pd.read_csv(path, sep="\t" if str(path).endswith((".tsv", ".tab")) else ",")
+
+
+def final(result, namespace, request, directory, phases, started):
+    """Refit a final plan on FIT and predict on PREDICT; never scored.
+
+    Rows that differ between fitting and predicting are read through skrub.var
+    holding a path, so the same recorded graph serves both environments."""
+    submission = result.get("submission") if isinstance(result, dict) else None
+    if not isinstance(submission, skrub.DataOp):
+        raise ValueError("A final plan returns {'submission': DataOp}")
+    fit_env, predict_env, fmt = namespace.get("FIT"), namespace.get("PREDICT"), namespace.get("FORMAT")
+    for name, env in (("FIT", fit_env), ("PREDICT", predict_env)):
+        if not isinstance(env, dict) or not env or not all(isinstance(v, str) for v in env.values()):
+            raise ValueError(f"{name} must map skrub.var names to task source paths")
+    if set(fit_env) != set(predict_env):
+        raise ValueError("FIT and PREDICT must bind the same skrub.var names")
+    for path in [*fit_env.values(), *predict_env.values(), *([fmt] if fmt else [])]:
+        if not is_source(path, request["sources"]):
+            raise ValueError(f"{path!r} is not a task source")
+    with phases("fit"):
+        learner = submission.skb.make_learner()
+        learner.fit(fit_env)
+    with phases("predict"):
+        table = learner.predict(predict_env)
+    if not isinstance(table, pd.DataFrame) or table.empty:
+        raise ValueError("The submission DataOp must produce a nonempty DataFrame at prediction time")
+    checks, warnings = [], []
+    suffix = ".csv"
+    if fmt:
+        sample = read_table(fmt)
+        suffix = Path(fmt).suffix or ".csv"
+        if list(table.columns) != list(sample.columns):
+            raise ValueError(f"Submission columns {list(table.columns)} differ from the format "
+                             f"{list(sample.columns)}")
+        checks.append("columns match the format")
+        key = sample.columns[0]
+        if len(table) != len(sample):
+            warnings.append(f"{len(table)} rows; the format has {len(sample)}")
+        if set(table[key]) != set(sample[key]):
+            warnings.append(f"{key} values differ from the format's")
+        else:
+            checks.append(f"same {key} values as the format")
+        if len(sample.columns) == 2 and table[sample.columns[1]].isna().any():
+            warnings.append("missing predictions")
+    path = directory / f"submission{suffix}"
+    table.to_csv(path, index=False, sep="\t" if suffix in (".tsv", ".tab") else ",")
+    return {"status": "ok", "duration_s": time.monotonic() - started, "submission": {
+        "path": str(path), "rows": len(table), "columns": list(table.columns), "checks": checks,
+        "warnings": warnings, "preview": table.head(10).to_string()}}
+
+
 def execute(request, directory, phases):
     contract = request.get("contract")
     if contract:
@@ -254,6 +307,11 @@ def execute(request, directory, phases):
             values += list(result["audit"].values())
         with phases("check_reads"):
             check_reads([v for v in values if isinstance(v, skrub.DataOp)], request["sources"])
+    if request["kind"] == "final":
+        if isinstance(result, dict) and isinstance(result.get("submission"), skrub.DataOp):
+            with phases("check_graph"):
+                validate_graph(result["submission"])
+        return final(result, namespace, request, directory, phases, started)
     if request["kind"] == "exploration":
         if not isinstance(result, dict) or not result:
             raise ValueError("Exploration must return a nonempty dict of named DataOp outputs")
