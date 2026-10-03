@@ -5,18 +5,27 @@ import { clock } from "@/lib/format";
 import type { ContextSizes } from "@/lib/types";
 
 // Size of the controller's input per control call, stacked by part. Colors follow
-// the part (fixed order), the remainder is neutral gray.
+// the part (fixed order), the remainder is neutral gray. Where the harness recorded
+// the provider's token counts, a switch shows the exact input tokens instead (one
+// series: the whole prompt, which the KB parts cover only in part).
 
 const W = 640, H = 200, M = { l: 56, r: 12, t: 10, b: 28 };
 const COLORS = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)",
   "var(--series-5)", "var(--series-6)"];
-const color = (i: number) => COLORS[i] ?? "var(--neutral-node)";
+const partColor = (i: number) => COLORS[i] ?? "var(--neutral-node)";
 const kb = (chars: number) => `${(chars / 1000).toFixed(1)} KB`;
+const tok = (n: number) => `${(n / 1000).toFixed(1)}k tokens`;
 
 export default function ContextChart({ data }: { data: ContextSizes }) {
   const [hover, setHover] = useState<number | null>(null);
-  const { parts, points } = data;
-  if (!points.length) return <p className="muted">No controller calls yet.</p>;
+  const [unit, setUnit] = useState<"kb" | "tokens">("kb");
+  const metered = data.points.some((p) => p.tokens !== undefined);
+  if (!data.points.length) return <p className="muted">No controller calls yet.</p>;
+  const tokens = unit === "tokens" && metered;
+  const parts = tokens ? ["input tokens"] : data.parts;
+  const points = tokens ? data.points.map((p) => ({ ...p, sizes: [p.tokens ?? 0] })) : data.points;
+  const color = (i: number) => (tokens ? "var(--accent)" : partColor(i));
+  const fmt = tokens ? tok : kb;
   const total = (s: number[]) => s.reduce((a, b) => a + b, 0);
   const max = Math.max(...points.map((p) => total(p.sizes)));
   const step = 10 ** Math.floor(Math.log10(max || 1));
@@ -31,6 +40,14 @@ export default function ContextChart({ data }: { data: ContextSizes }) {
 
   return (
     <div style={{ position: "relative" }}>
+      {metered && (
+        <div className="tree-controls" role="group" aria-label="Unit">
+          {(["kb", "tokens"] as const).map((u) => (
+            <button key={u} aria-pressed={unit === u} className={unit === u ? "primary" : ""}
+              onClick={() => setUnit(u)}>{u === "kb" ? "KB by part" : "input tokens (exact)"}</button>
+          ))}
+        </div>
+      )}
       <div className="legend">
         {parts.map((p, i) => (
           <span key={p}><svg width="12" height="12"><rect width="12" height="12" rx="3" fill={color(i)} /></svg> {p}</span>
@@ -41,7 +58,7 @@ export default function ContextChart({ data }: { data: ContextSizes }) {
         {ticks.map((t) => (
           <g key={t}>
             <line x1={M.l} x2={W - M.r} y1={y(t)} y2={y(t)} stroke="var(--grid)" />
-            <text x={M.l - 6} y={y(t) + 4} textAnchor="end" fontSize="10" fill="var(--muted)">{kb(t)}</text>
+            <text x={M.l - 6} y={y(t) + 4} textAnchor="end" fontSize="10" fill="var(--muted)">{fmt(t)}</text>
           </g>
         ))}
         <text x={(W + M.l) / 2} y={H - 4} textAnchor="middle" fontSize="10" fill="var(--muted)">control call</text>
@@ -69,18 +86,21 @@ export default function ContextChart({ data }: { data: ContextSizes }) {
       </svg>
       {h && (
         <div className="tooltip" style={{ left: `${((x(hover!) + bar / 2) / W) * 100}%`, top: 24 }}>
-          <b>call {h.order}</b> {h.time ? clock(h.time) : ""} · {kb(total(h.sizes))}<br />
-          {parts.map((p, j) => <span key={p}>{p}: {kb(h.sizes[j])}<br /></span>)}
+          <b>call {h.order}</b> {h.time ? clock(h.time) : ""} · {fmt(total(h.sizes))}<br />
+          {!tokens && parts.map((p, j) => <span key={p}>{p}: {kb(h.sizes[j])}<br /></span>)}
+          {h.tokens !== undefined && <span>prompt: {tok(h.tokens)} (exact)</span>}
         </div>
       )}
       <details>
         <summary className="muted small">table</summary>
         <table className="list small">
-          <thead><tr><th>call</th><th>time</th><th>total</th>{parts.map((p) => <th key={p}>{p}</th>)}</tr></thead>
+          <thead><tr><th>call</th><th>time</th><th>total</th>{data.parts.map((p) => <th key={p}>{p}</th>)}
+            {metered && <th>input tokens</th>}</tr></thead>
           <tbody>
-            {points.map((p) => (
+            {data.points.map((p) => (
               <tr key={p.order}><td>{p.order}</td><td className="mono">{p.time ? clock(p.time) : ""}</td>
-                <td>{kb(total(p.sizes))}</td>{p.sizes.map((v, j) => <td key={j}>{kb(v)}</td>)}</tr>
+                <td>{kb(total(p.sizes))}</td>{p.sizes.map((v, j) => <td key={j}>{kb(v)}</td>)}
+                {metered && <td>{p.tokens !== undefined ? p.tokens.toLocaleString() : "—"}</td>}</tr>
             ))}
           </tbody>
         </table>

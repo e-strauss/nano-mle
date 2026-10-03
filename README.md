@@ -236,8 +236,14 @@ Example: a control call of a 4 h Gemini forest-cover run, after 8 expansions:
 | Next parent, time, budgets, counts, sources | 2.5 KB | fixed |
 
 Over that run the context went 7 KB (first call) → 34 KB (evaluation locked) →
-51 KB (after 3 expansions) → 55 KB (after 8), about 14k tokens. The dashboard plots
-this per control call, stacked by part.
+51 KB (after 3 expansions) → 55 KB (after 8), about 14k tokens (estimated at 4
+characters per token). The dashboard plots this per control call, stacked by part.
+
+Each model call also records the provider's exact token usage (input, output,
+reasoning, cached) and its cost, as LiteLLM reports them for any model; cost is
+empty for a model missing from LiteLLM's price table. The record is the call's
+`usage` in the journal. The dashboard switches the context chart to exact input
+tokens and lists tokens and cost per role.
 
 ## Plans
 

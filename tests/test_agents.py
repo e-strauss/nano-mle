@@ -32,3 +32,16 @@ def test_bare_plan_code_is_accepted_as_the_writer_answer():
     assert bare_source("```python\n" + code + "```") == code.strip()
     assert bare_source(code + "\n[[ ## completed ## ]]") == code.strip()
     assert bare_source("I cannot help with that.") is None
+
+
+def test_usage_sums_every_lm_request_of_a_call():
+    from litellm.types.utils import CompletionTokensDetailsWrapper, Usage
+
+    from nano_mle.agents import usage_of
+
+    usage = dict(Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150,
+                       completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=30)))
+    summed = usage_of([{"usage": usage, "cost": 0.001}, {"usage": usage, "cost": 0.002}])
+    assert summed == {"input_tokens": 200, "output_tokens": 100, "reasoning_tokens": 60, "cached_tokens": 0,
+                      "cost": 0.003, "lm_calls": 2}
+    assert usage_of([{"usage": usage, "cost": None}])["cost"] is None

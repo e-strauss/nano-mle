@@ -388,3 +388,19 @@ def test_controller_sees_the_parent_the_expansion_uses(tmp_path, search_policy):
     expansions = Store(root).records("expansion")
     assert backend.shown == [e["parent_id"] for e in expansions] and len(expansions) == 2
     assert set(backend.planned) <= set(backend.shown)
+
+
+def test_model_calls_record_the_backend_token_usage(tmp_path):
+    class Metered(ScriptedBackend):
+        usage = None
+
+        def control(self, context):
+            self.usage = {"input_tokens": 10, "output_tokens": 2}
+            return super().control(context)
+
+    workspace = make_scripted_run(tmp_path / "run", backend=Metered())
+    calls = Store(workspace).records("model_call")
+    assert all(c.get("usage") == {"input_tokens": 10, "output_tokens": 2}
+               for c in calls if c["method"] == "control")
+    # The runner clears usage before each call, so a call that reports none records none.
+    assert all("usage" not in c for c in calls if c["method"] != "control")

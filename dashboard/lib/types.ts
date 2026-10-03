@@ -58,7 +58,12 @@ export type ScorePoint = { node: string; order: number; score: number | null; la
 
 // Size of the controller's input per control call, split into named parts
 // (characters of JSON). parts[i] labels sizes[i]; the last part is the remainder.
-export type ContextSizes = { parts: string[]; points: { order: number; time: number; sizes: number[] }[] };
+// tokens: the provider's exact input-token count for the whole prompt (instructions
+// included), when the harness recorded it.
+export type ContextSizes = {
+  parts: string[];
+  points: { order: number; time: number; sizes: number[]; tokens?: number }[];
+};
 
 export type RunDetail = {
   summary: RunSummary;

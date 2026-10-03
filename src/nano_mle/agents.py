@@ -29,6 +29,24 @@ def bare_source(response):
     return text if "def build" in text else None
 
 
+def usage_of(entries):
+    """Token usage of LM history entries, as LiteLLM reports it for any provider. Cost
+    comes from LiteLLM's price table and is None for models it does not price."""
+    def detail(usage, field, key):
+        value = usage.get(field)
+        value = value.get(key) if isinstance(value, dict) else getattr(value, key, None)
+        return value or 0
+
+    usages = [entry.get("usage") or {} for entry in entries]
+    costs = [entry.get("cost") for entry in entries]
+    return {"input_tokens": sum(u.get("prompt_tokens") or 0 for u in usages),
+            "output_tokens": sum(u.get("completion_tokens") or 0 for u in usages),
+            "reasoning_tokens": sum(detail(u, "completion_tokens_details", "reasoning_tokens") for u in usages),
+            "cached_tokens": sum(detail(u, "prompt_tokens_details", "cached_tokens") for u in usages),
+            "cost": sum(costs) if costs and all(c is not None for c in costs) else None,
+            "lm_calls": len(entries)}
+
+
 class Backend(Protocol):
     def control(self, context: dict) -> Decision: ...
     def plan(self, context: dict) -> Proposal: ...
@@ -36,6 +54,7 @@ class Backend(Protocol):
     def repair(self, kind: str, context: dict, intent: dict, source: str, error: str) -> str: ...
     def interpret(self, context: dict, question: str, result: dict) -> list[Finding]: ...
     def summarize(self, context: dict, instruction: str) -> str: ...  # for memories
+    # Optional: `usage`, the token usage of the latest call (see usage_of), or None.
 
 
 class DSPyBackend:
@@ -53,6 +72,7 @@ class DSPyBackend:
         if model.startswith("gemini/"):
             kwargs["api_key"] = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
         self.lm = dspy.LM(model, **kwargs)
+        self.usage = None
         self.dspy = dspy
         self.adapter = dspy.ChatAdapter(use_json_adapter_fallback=False)
 
@@ -101,8 +121,13 @@ class DSPyBackend:
         self.summarizer = dspy.Predict(Summarize)
 
     def _call(self, module, **kwargs):
-        with self.dspy.context(lm=self.lm, adapter=self.adapter):
-            return module(**{k: json.dumps(v) if isinstance(v, (dict, list)) else v for k, v in kwargs.items()})
+        # The LM history holds only this call's requests, so usage covers a failed parse too.
+        self.lm.history.clear()
+        try:
+            with self.dspy.context(lm=self.lm, adapter=self.adapter):
+                return module(**{k: json.dumps(v) if isinstance(v, (dict, list)) else v for k, v in kwargs.items()})
+        finally:
+            self.usage = usage_of(self.lm.history)
 
     def control(self, context):
         return Decision.model_validate(self._call(self.controller, context=context).decision)

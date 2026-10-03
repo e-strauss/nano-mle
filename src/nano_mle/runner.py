@@ -185,13 +185,16 @@ class Runner:
         (directory / f"{call_id}.input.json").write_text(json.dumps(request, indent=2))
         self.store.put("model_call", {"id": call_id, "method": method, "status": "started"})
         self.store.event("model_call_started", id=call_id, method=method)
+        if hasattr(self.backend, "usage"):
+            self.backend.usage = None
         try:
             result = getattr(self.backend, method)(**kwargs)
         except Exception as error:
             # A malformed structured answer (e.g. a probe without a question) must not end
             # the run: record it and ask again once, showing the model its own error.
             self.store.put("model_call", {"id": call_id, "method": method, "status": "failed",
-                                          "error": " ".join(str(error).split())[:2000]})
+                                          "error": " ".join(str(error).split())[:2000],
+                                          **self.usage()})
             self.store.event("model_call_failed", id=call_id, method=method)
             if retry or not isinstance(kwargs.get("context"), dict):
                 raise
@@ -200,9 +203,13 @@ class Runner:
         encoded = (result.model_dump() if hasattr(result, "model_dump") else
                    [f.model_dump() for f in result] if isinstance(result, list) else result)
         (directory / f"{call_id}.output.json").write_text(json.dumps(encoded, indent=2))
-        self.store.put("model_call", {"id": call_id, "method": method, "status": "finished"})
+        self.store.put("model_call", {"id": call_id, "method": method, "status": "finished", **self.usage()})
         self.store.event("model_call_finished", id=call_id, method=method)
         return result
+
+    def usage(self):
+        usage = getattr(self.backend, "usage", None)
+        return {"usage": usage} if usage else {}
 
     def attempt_timeout(self):
         """An attempt may not run past the run's time budget."""

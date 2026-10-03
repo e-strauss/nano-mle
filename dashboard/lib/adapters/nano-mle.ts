@@ -442,14 +442,31 @@ function findingSections(ws: Workspace, ids: string[], title: string): Section[]
     content: rows.map((f) => `• [${f.kind}] ${f.statement}\n  scope: ${f.scope}\n  evidence: ${f.evidence}`).join("\n\n") }];
 }
 
+const kTokens = (n: number) => `${(n / 1000).toFixed(1)}k`;
+
+// Calls, tokens and cost of a group of model calls; tokens only where recorded.
+function usageText(calls: Rec[]): string {
+  const metered = calls.filter((c) => c.usage);
+  const sum = (k: string) => metered.reduce((n, c) => n + (c.usage[k] ?? 0), 0);
+  const text = [String(calls.length)];
+  if (metered.length) {
+    text.push(`${kTokens(sum("input_tokens"))} in`,
+      `${kTokens(sum("output_tokens"))} out (${kTokens(sum("reasoning_tokens"))} reasoning)`);
+    if (metered.every((c) => typeof c.usage.cost === "number")) text.push(`$${sum("cost").toFixed(3)}`);
+    if (metered.length < calls.length) text.push(`${calls.length - metered.length} calls unmetered`);
+  }
+  return text.join(" · ");
+}
+
 function overview(ws: Workspace): Section[] {
   const calls = ws.of("model_call");
-  const methods = new Map<string, number>();
-  for (const c of calls) methods.set(c.method, (methods.get(c.method) ?? 0) + 1);
+  const methods = new Map<string, Rec[]>();
+  for (const c of calls) methods.set(c.method, [...(methods.get(c.method) ?? []), c]);
   const findings = ws.of("finding");
   const superseded = new Set(findings.flatMap((f) => f.supersedes ?? []));
   return [
-    { title: "model calls by method", kind: "kv", content: [...methods].map(([k, v]) => [k, String(v)]) },
+    { title: "model calls by method", kind: "kv",
+      content: [...[...methods].map(([k, v]): [string, string] => [k, usageText(v)]), ["total", usageText(calls)]] },
     { title: `active findings (${findings.length - superseded.size})`, kind: "text",
       content: findings.filter((f) => !superseded.has(f.id))
         .map((f) => `• [${f.kind}] ${f.statement}  (${f.scope})`).join("\n") },
@@ -500,7 +517,7 @@ function contextSizes(ws: Workspace): ContextSizes {
         Object.keys(context).filter((k) => !named.has(k)).reduce((n, k) => n + size(k), 0)];
       contextCache.set(file, sizes);
     }
-    return [{ order: i + 1, time: started.get(c.id) ?? 0, sizes }];
+    return [{ order: i + 1, time: started.get(c.id) ?? 0, sizes, tokens: c.usage?.input_tokens }];
   });
   return { parts: [...CONTEXT_PARTS.map(([name]) => name), "other"], points };
 }
