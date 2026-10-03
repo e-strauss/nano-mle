@@ -15,7 +15,10 @@ DEFAULTS = {
     "prompts": {"data_volume_study": True},
     # Parameters per memory, e.g. [memory.window] leaderboard = 8; empty means the
     # memory's own defaults (see memory.py).
-    "memory": {"window": {}, "full": {}},
+    "memory": {"window": {}, "full": {}, "aide": {"explorations": 4}},
+    "policy": {"greedy": {}, "draft-greedy": {"num_drafts": 5},
+               "mcts": {"exploration": 1.414}, "mcgs": {"seed": 42, "exploration": 1.414}},
+    "controller": {"llm": {}, "auto": {"time_margin": 1.0}},
 }
 
 
@@ -38,7 +41,11 @@ def load_config() -> dict:
         extra = set(given) - set(values)
         if extra:
             raise ValueError(f"Unknown keys in [{section}] of {path}: {sorted(extra)}")
-        config[section] = {**values, **given}
+        if section in ("memory", "policy", "controller"):
+            config[section] = {name: {**params, **given.get(name, {})}
+                               for name, params in values.items()}
+        else:
+            config[section] = {**values, **given}
     return config
 
 

@@ -31,6 +31,20 @@ class Greedy:
         return Selection(parent, [])
 
 
+class DraftGreedy(Greedy):
+    """Draft for the first N expansions (including failures), then use greedy."""
+
+    name = "draft-greedy"
+
+    def __init__(self, num_drafts=5):
+        if type(num_drafts) is not int or num_drafts < 0:
+            raise ValueError("num_drafts must be a non-negative integer")
+        self.num_drafts = num_drafts
+
+    def select(self, candidates, stats, step):
+        return Selection("root", []) if step < self.num_drafts else super().select(candidates, stats, step)
+
+
 class MCTS:
     """UCT over a primary tree with progressive widening; no separate rollouts."""
 
@@ -68,8 +82,8 @@ class MCGS(MCTS):
 
     name = "mcgs"
 
-    def __init__(self, max_steps, seed=42):
-        super().__init__()
+    def __init__(self, max_steps, seed=42, exploration=1.414):
+        super().__init__(exploration=exploration)
         self.max_steps = max_steps
         self.seed = seed
 
@@ -90,8 +104,9 @@ class MCGS(MCTS):
         return Selection(parent, [c["id"] for c in elite if c["id"] not in ancestors][:2])
 
 
-def policy(name, max_steps):
-    return {"greedy": Greedy, "mcts": MCTS, "mcgs": lambda: MCGS(max_steps)}[name]()
+def policy(name, max_steps, params=None):
+    return {"greedy": Greedy, "draft-greedy": DraftGreedy, "mcts": MCTS,
+            "mcgs": lambda **kwargs: MCGS(max_steps, **kwargs)}[name](**(params or {}))
 
 
 def update_stats(stats, candidates, new_candidates, baseline):

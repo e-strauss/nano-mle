@@ -3,9 +3,10 @@
 A small, sequential harness for LLM-driven ML experimentation on tabular data.
 A language model proposes data explorations, an evaluation setup and pipeline
 experiments; the harness executes them, enforces budgets, locks the evaluation,
-records every attempt and runs an interchangeable search policy (greedy, MCTS or
-MCGS) over the resulting candidates. An interchangeable memory decides what each
-model call sees of the run's history.
+records every attempt and runs an interchangeable search policy (greedy,
+draft-greedy, MCTS or MCGS) over the resulting candidates. An interchangeable memory
+decides what each model call sees of the run's history. The controller can either
+choose every action with an LLM or expand automatically after evaluation is locked.
 
 All model-written code is expressed as [Skrub DataOps](https://skrub-data.org)
 computation graphs: data reads, joins, aggregations, features and estimators are
@@ -79,7 +80,62 @@ the configuration it used in its workspace metadata.
 | `[execution] grid_n_jobs` | 1 | Fits run in parallel processes by the grid search; each gets `cpu_threads // grid_n_jobs` threads and its own copy of X and y, so values above 1 only pay off for small data. Probes fit sequentially with all threads. |
 | `[plans] restrict_primitives` | false | Limit `apply_func` to the curated primitives in `graphs.PRIMITIVES`. Disabled for now, so plans may call any library function; plan-defined functions and lambdas are rejected either way. |
 | `[memory.<name>] …` | memory defaults | Parameters of a memory, read at `init` (e.g. `[memory.window] leaderboard = 8`, `[memory.full] max_chars = 400000`). |
+| `[policy.<name>] …` | policy defaults | Parameters saved at `init`: draft count, UCT exploration coefficient or MCGS seed. |
+| `[controller.auto] time_margin` | 1.0 | Auto stops when the remaining time is less than this factor times the median expansion worker duration. 0 disables the estimate. |
 | `[prompts] data_volume_study` | true | Adds the data-volume-study convention for the planner and controller: for large sources, explore which rows and table parts are needed before the lock, and measure a learning curve over training-set size after it. |
+
+### Agent configurations
+
+Controller, policy and memory are independent choices set at `init`. The default
+remains `--controller llm --policy greedy --memory window`. The LLM controller
+chooses every action, including probes and explorations after the evaluation lock.
+`--controller auto` uses the same LLM controller to prepare and lock evaluation,
+then expands automatically. It supplies the planner with a direction to draft a
+new, simple and different solution when the selected parent is root, or make one
+measurable change when a candidate is selected.
+
+The `aide` preset selects `auto`, `draft-greedy`, `aide` memory, and
+`--max-requested-explorations 0`:
+
+```bash
+uv run nano-mle init workspaces/aide-run --task task.json --preset aide \
+  --max-expansions 20 --max-evaluations 80 --max-model-calls 160 \
+  --execution-timeout 1800 --time-budget 8h
+uv run nano-mle run workspaces/aide-run --model openai/gpt-6.1-sol
+```
+
+Explicit flags override the preset regardless of their order. For example,
+`--preset aide --memory window` compares memories, while
+`--preset aide --controller llm --max-requested-explorations 2` lets the LLM choose
+actions and permits the planner to request explorations inside an expansion.
+Without a preset, that exploration limit defaults to 2, including with `auto`.
+Other budgets retain their existing defaults and CLI controls.
+
+Set parameters in TOML, such as `[policy.draft-greedy] num_drafts = 5`,
+`[policy.mcts] exploration = 1.414`, `[policy.mcgs] seed = 42`, and
+`[memory.aide] explorations = 4`. The workspace records the resolved component
+names and parameters, rather than a preset name. Resume uses those saved settings;
+changing TOML does not change them. Older workspaces retain the LLM controller and
+the original policy defaults. `workspace.json` and the report expose the choices;
+automatic decisions use the usual `controller_decision` journal events.
+
+Auto stops at the expansion/evaluation limits, and can stop early using
+`[controller.auto] time_margin`. The time estimate uses past worker durations,
+excluding model calls and cumulative repairs, so it cannot guarantee the next
+expansion fits. With no expansion history, the first one is allowed; existing
+worker timeouts still bound it. Action, model-call and wall-time budgets can end a
+run before its expansion limit.
+
+This is an **AIDE-like drafting and greedy-improvement configuration, adapted to
+Skrub DataOps and harness-locked evaluation**, following the
+[AIDE paper](https://arxiv.org/html/2502.13138v1). It retains separate planner/writer
+calls, immediate repairs inside an expansion, harness scoring, parameter grids,
+and final submission. It omits AIDE's probabilistic debugging of failed tree nodes
+and per-program LLM reviews. AIDE's `max_debug_depth` counts a debug path across
+search steps; our `max_repairs` limits repairs inside one expansion and is not an
+equivalent setting. Grids create several candidates per expansion, so choose an
+evaluation budget large enough for them. The preset disables planner-requested
+explorations; a request is rejected and its failed expansion still counts.
 
 ### CPU setup and parallel runs
 
@@ -142,7 +198,7 @@ scored and never become candidates.
 
 ## How a run works
 
-A single controller loop chooses one action at a time:
+A single loop dispatches one controller decision at a time:
 
 | Action | What happens | Scored? |
 |---|---|---|
@@ -156,8 +212,8 @@ Who decides what, compared with a single-agent harness such as mle-claude:
 
 | Decision | mle-claude | nano-mle |
 |---|---|---|
-| Next action (explore, lock evaluation, expand, probe, stop) | LLM | LLM controller |
-| Which candidate to build on | LLM | search policy (greedy / MCTS / MCGS); the controller sees its pick before deciding |
+| Next action (explore, lock evaluation, expand, probe, stop) | LLM | LLM controller, or auto after the lock |
+| Which candidate to build on | LLM | search policy (greedy / draft-greedy / MCTS / MCGS); the controller sees its pick before deciding |
 | What to change in the experiment | LLM | LLM planner, given the selected node and the controller's reason for expanding |
 | Writing and fixing code | LLM | LLM writer / repairer |
 | Turning outputs into findings | LLM | LLM interpreter |
@@ -220,6 +276,7 @@ class Memory(Protocol):
 |---|---|
 | `window` (default) | the best 8 candidates, the last 4 explorations with their output previews, the last 4 failures, all active findings, all probe outputs, the parent's last 6 ancestors |
 | `full` | everything recorded: all candidates, failures, explorations, findings (superseded ones flagged), probes and the whole lineage, up to `max_chars` of JSON (default 400,000); beyond it the oldest explorations, then the oldest failures, then the lowest-ranked candidates are omitted and counted |
+| `aide` | every valid candidate's id, description, configuration description and score, in creation order; active findings, the last 4 exploration previews and probe outputs preserve evidence for evaluation preparation or an LLM controller. No candidate code, failure history or ancestry is included; the harness still supplies the selected parent's source and current repair traceback. Candidate summaries grow with the run. |
 
 With `window`, the context grows early and then levels off; only findings grow
 without bound.
@@ -361,6 +418,10 @@ Candidates are search nodes; explorations and findings are evidence and carry no
 
 **Policies.**
 - `greedy` expands the best valid candidate.
+- `draft-greedy` selects root for the first `num_drafts` expansion attempts (default
+  5), then expands the best valid candidate, returning to root if none is valid.
+  Failures, including planner failures without candidates, count. A grid counts as
+  one expansion, regardless of how many variants it produces.
 - `mcts` uses UCT with progressive widening.
 - `mcgs` adds an elite-selection schedule and passes cross-branch candidates to the
   planner as references.
@@ -404,6 +465,7 @@ still shows which phase was running.
 |---|---|
 | `cli.py` | Entry point: `init`, `run`, `submit`, `show`, `draw`. |
 | `runner.py` | Controller loop, budgets, repair loop, exploration/setup/expansion, report export, resume. |
+| `controllers.py` | LLM and automatic next-action strategies. |
 | `memory.py` | Memory protocol, read-only journal view, `window` and `full` memories. |
 | `agents.py` | DSPy backend: controller, planner, writer, repairer and interpreter signatures. |
 | `prompts.py` | Instructions for the controller, planner and writer. |

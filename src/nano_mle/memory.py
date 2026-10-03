@@ -133,7 +133,35 @@ class Full:
         pass
 
 
-MEMORIES = {"window": Window, "full": Full}
+class Aide:
+    """Chronological solution summaries, with evidence for evaluation preparation.
+
+    The harness supplies the selected parent's source and the current repair error;
+    this memory does not include candidate code or historical failure traces.
+    """
+
+    name = "aide"
+
+    def __init__(self, explorations=4):
+        if type(explorations) is not int or explorations < 0:
+            raise ValueError("explorations must be a non-negative integer")
+        self.explorations = explorations
+        self.ask = None
+
+    def view(self, role, journal, query=None, parent_id=None):
+        return {"leaderboard": [{k: c.get(k) for k in
+                                 ("id", "description", "configuration_description", "score")}
+                                for c in valid(journal.records("candidate"))],
+                "findings": active_findings(journal),
+                "recent_explorations": (journal.records("exploration")[-self.explorations:]
+                                        if self.explorations else []),
+                "probe_outputs": probe_outputs(journal)}
+
+    def observe(self, kind, record):
+        pass
+
+
+MEMORIES = {"window": Window, "full": Full, "aide": Aide}
 
 
 def memory(name, params=None):

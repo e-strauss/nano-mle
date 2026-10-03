@@ -5,6 +5,19 @@ import json
 from pathlib import Path
 
 
+PRESETS = {"aide": {"controller": "auto", "policy": "draft-greedy", "memory": "aide",
+                    "max_requested_explorations": 0}}
+
+
+def resolve_settings(args):
+    """Existing defaults, then the preset, then explicitly supplied init flags."""
+    defaults = {"controller": "llm", "policy": "greedy", "memory": "window",
+                "max_requested_explorations": 2}
+    defaults.update(PRESETS.get(args.preset, {}))
+    return {key: getattr(args, key) if getattr(args, key) is not None else value
+            for key, value in defaults.items()}
+
+
 def duration(text):
     """Seconds from '3600', '90m', '8h' or '1d'."""
     units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -30,11 +43,17 @@ def main():
     init = sub.add_parser("init", help="Initialize a workspace; makes no model calls")
     init.add_argument("workspace", type=Path)
     init.add_argument("--task", required=True, type=Path)
-    init.add_argument("--policy", choices=["greedy", "mcts", "mcgs"], default="greedy")
-    init.add_argument("--memory", choices=["window", "full"], default="window",
+    init.add_argument("--preset", choices=list(PRESETS), help="Default component choices; explicit flags override")
+    init.add_argument("--controller", choices=["llm", "auto"],
+                      help="Next-action strategy (default: llm); auto expands after evaluation is locked")
+    init.add_argument("--policy", choices=["greedy", "draft-greedy", "mcts", "mcgs"],
+                      help="Parent selection (default: greedy)")
+    init.add_argument("--memory", choices=["window", "full", "aide"],
                       help="What model calls see of the run's history; parameters in nano-mle.toml [memory.<name>]")
     init.add_argument("--max-expansions", type=int, default=6)
     init.add_argument("--max-explorations", type=int, default=8)
+    init.add_argument("--max-requested-explorations", type=int,
+                      help="Planner explorations per expansion (default: 2; aide preset: 0)")
     init.add_argument("--max-evaluations", type=int, default=24)
     init.add_argument("--max-evaluation-setups", type=int, default=3)
     init.add_argument("--max-actions", type=int, default=30)
@@ -73,13 +92,16 @@ def main():
         from .models import Budget
         from .runner import initialize
 
+        settings = resolve_settings(args)
         budget = Budget(max_expansions=args.max_expansions, max_explorations=args.max_explorations,
                         max_evaluations=args.max_evaluations, max_actions=args.max_actions,
                         max_evaluation_setups=args.max_evaluation_setups,
+                        max_requested_explorations=settings["max_requested_explorations"],
                         max_repairs=args.max_repairs, max_probes=args.max_probes,
                         execution_timeout=args.execution_timeout,
                         max_model_calls=args.max_model_calls, max_wall_seconds=args.time_budget)
-        initialize(args.workspace.resolve(), load_task(args.task), budget, args.policy, args.memory)
+        initialize(args.workspace.resolve(), load_task(args.task), budget, settings["policy"],
+                   settings["memory"], settings["controller"])
         print(f"Initialized {args.workspace.resolve()}")
     elif args.command == "run":
         from .agents import DSPyBackend

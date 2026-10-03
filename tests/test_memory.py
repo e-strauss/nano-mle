@@ -3,7 +3,7 @@ import json
 import pytest
 
 from nano_mle import memory as memories
-from nano_mle.memory import Full, Journal, Window
+from nano_mle.memory import Aide, Full, Journal, Window
 from nano_mle.models import Budget, Task
 from nano_mle.runner import Runner, initialize
 from nano_mle.store import Store
@@ -52,6 +52,27 @@ def test_window_parameters_bound_the_view(tmp_path):
     store = Store(make_scripted_run(tmp_path / "run"))
     view = Window(leaderboard=1, explorations=1).view("plan", Journal(store))
     assert len(view["leaderboard"]) == 1 and len(view["recent_explorations"]) == 1
+
+
+def test_aide_memory_keeps_chronological_summaries_and_bootstrap_evidence(tmp_path):
+    store = Store(make_scripted_run(tmp_path / "run", memory_name="aide"))
+    try:
+        # Insertion order, rather than rank, must decide the summary order.
+        for id, score in (("later_best", 100), ("last", -100)):
+            store.put("candidate", {"id": id, "status": "ok", "score": score,
+                                    "description": id, "configuration_description": {"alpha": 1},
+                                    "source_path": "hidden.py", "fold_scores": [score]})
+        store.put("candidate", {"id": "failed", "status": "failed", "score": None})
+        view = Aide(explorations=1).view("plan", Journal(store))
+        assert [c["id"] for c in view["leaderboard"]] == [
+            c["id"] for c in store.records("candidate") if c["status"] == "ok"]
+        assert all(set(c) == {"id", "description", "configuration_description", "score"}
+                   for c in view["leaderboard"])
+        assert view["findings"] and len(view["recent_explorations"]) == 1
+        assert "trajectory" not in view and "recent_failures" not in view
+        assert Aide(explorations=0).view("plan", Journal(store))["recent_explorations"] == []
+    finally:
+        store.close()
 
 
 def test_memory_calls_are_journaled_and_budgeted(tmp_path, monkeypatch):

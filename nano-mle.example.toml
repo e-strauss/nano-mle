@@ -35,3 +35,29 @@ data_volume_study = true
 [memory.full]
 # max_chars = 400000  # JSON size cap; oldest explorations, then failures, then
 #                     # lowest-ranked candidates are omitted beyond it
+
+[memory.aide]
+# All valid candidates are shown as concise summaries, in creation order.
+explorations = 4     # latest explorations, so evaluation preparation keeps its evidence
+
+# Policy/controller parameters are also read at init and saved in the workspace.
+# Changing this file does not change these choices on resume.
+[policy.greedy]
+
+[policy.draft-greedy]
+num_drafts = 5       # first N expansion attempts select root, including planner failures
+
+[policy.mcts]
+exploration = 1.414  # UCT exploration coefficient
+
+[policy.mcgs]
+seed = 42
+exploration = 1.414
+
+[controller.llm]
+
+[controller.auto]
+# Stop when remaining seconds < time_margin * median expansion worker duration.
+# This estimate excludes model calls and cumulative repairs; it is a heuristic.
+# With no expansion history the first expansion is allowed. 0 disables the estimate.
+time_margin = 1.0

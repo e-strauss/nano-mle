@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from .config import load_config
+from .controllers import controller
 from .contracts import create_contract, digest, source_manifest, verify_contract
 from .execution import run_plan
 from .models import Budget, Task
@@ -23,10 +24,16 @@ class ModelCallBudgetExceeded(RuntimeError):
     pass
 
 
-def initialize(workspace: Path, task: Task, budget: Budget, search_policy="greedy", memory_name="window"):
+def initialize(workspace: Path, task: Task, budget: Budget, search_policy="greedy", memory_name="window",
+               controller_name="llm"):
     manifest = source_manifest(task)
-    params = load_config()["memory"].get(memory_name, {})
+    config = load_config()
+    params = config["memory"].get(memory_name, {})
+    policy_params = config.get("policy", {}).get(search_policy, {})
+    controller_params = config.get("controller", {}).get(controller_name, {})
     memory(memory_name, params)  # unknown names or parameters fail before anything is written
+    policy(search_policy, budget.max_expansions, policy_params)
+    controller(controller_name, controller_params)
     workspace.mkdir(parents=True, exist_ok=False)
     (workspace / "artifacts").mkdir()
     store = Store(workspace)
@@ -35,11 +42,14 @@ def initialize(workspace: Path, task: Task, budget: Budget, search_policy="greed
         store.set_meta("sources", manifest)
         store.set_meta("budget", budget.model_dump())
         store.set_meta("policy", search_policy)
+        store.set_meta("policy_params", policy_params)
+        store.set_meta("controller", controller_name)
+        store.set_meta("controller_params", controller_params)
         store.set_meta("memory", {"name": memory_name, "params": params})
         store.set_meta("state", "ready")
         store.set_meta("actions", 0)
         store.set_meta("search_stats", {})
-        store.event("initialized", policy=search_policy, memory=memory_name)
+        store.event("initialized", policy=search_policy, memory=memory_name, controller=controller_name)
         export_workspace(store)
     finally:
         store.close()
@@ -50,6 +60,9 @@ def export_workspace(store):
     candidates = store.records("candidate")
     metadata = {"task": store.meta("task"), "sources": store.meta("sources"),
                 "budget": store.meta("budget"), "policy": store.meta("policy"), "memory": store.meta("memory"), "model": store.meta("model"), "config": store.meta("config"),
+                "policy_params": store.meta("policy_params", {}),
+                "controller": store.meta("controller", "llm"),
+                "controller_params": store.meta("controller_params", {}),
                 "elapsed_s": store.meta("elapsed_s"),
                 "state": store.meta("state"), "evaluation": store.meta("contract")}
     (workspace / "workspace.json").write_text(json.dumps(metadata, indent=2))
@@ -60,7 +73,9 @@ def export_workspace(store):
              "search_stats": store.meta("search_stats")}
     (workspace / "graph.json").write_text(json.dumps(graph, indent=2))
     lines = ["# Experiment report", "",
-             f"Policy: {store.meta('policy')}; model: {store.meta('model')}; state: {store.meta('state')}; "
+             f"Controller: {store.meta('controller', 'llm')}; policy: {store.meta('policy')}; "
+             f"memory: {store.meta('memory', {'name': 'window'})['name']}; "
+             f"model: {store.meta('model')}; state: {store.meta('state')}; "
              f"elapsed: {round(store.meta('elapsed_s', 0) / 60)} min", "",
              "| Candidate | Parent | Status | Score | Configuration |", "|---|---|---|---:|---|"]
     for candidate in sorted(candidates, key=lambda c: c["score"] if c["score"] is not None else float("-inf"), reverse=True):
@@ -108,7 +123,10 @@ class Runner:
         self.backend = backend
         self.task = Task.model_validate(self.store.meta("task"))
         self.budget = Budget.model_validate(self.store.meta("budget"))
-        self.policy = policy(self.store.meta("policy"), self.budget.max_expansions)
+        self.policy = policy(self.store.meta("policy"), self.budget.max_expansions,
+                             self.store.meta("policy_params", {}))
+        self.controller = controller(self.store.meta("controller", "llm"),
+                                     self.store.meta("controller_params", {}))
         chosen = self.store.meta("memory", {"name": "window", "params": {}})  # workspaces before memories
         self.memory = memory(chosen["name"], chosen["params"])
         self.memory.ask = lambda context, instruction: self.call("summarize", context=context, instruction=instruction)
@@ -364,7 +382,10 @@ class Runner:
             return None
         selection = self.peek()
         if selection.parent_id == "root":
-            return {"id": "root", "note": "a new pipeline from the locked evaluation"}
+            parent = {"id": "root", "note": "a new pipeline from the locked evaluation"}
+            if self.policy.name == "draft-greedy" and self.counts()["expansions"] < self.policy.num_drafts:
+                parent.update(draft_number=self.counts()["expansions"] + 1, num_drafts=self.policy.num_drafts)
+            return parent
         parent = self.store.get(selection.parent_id)
         return {"id": parent["id"], "score": parent.get("score"), "fold_scores": parent.get("fold_scores"),
                 "configuration": parent.get("configuration_description"),
@@ -470,8 +491,8 @@ class Runner:
                 self.store.event("stopped", reason="Time budget exhausted")
                 return
             self.store.set_meta("actions", self.counts()["actions"] + 1)
-            decision = self.call("control", context=self.context(
-                "control", extra={"next_expansion_parent": self.next_parent_context()}))
+            decision = self.controller.decide(self.context(
+                "control", extra={"next_expansion_parent": self.next_parent_context()}), self.call)
             self.store.event("controller_decision", **decision.model_dump())
             if decision.action == "stop":
                 self.store.event("stopped", reason=decision.reason)
