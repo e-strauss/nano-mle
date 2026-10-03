@@ -99,9 +99,16 @@ def _strings(value):
 
 
 def _looks_like_path(text):
+    """URLs, and strings naming an existing file or directory. Separators such as
+    "/" and other constants that happen to contain slashes are not paths."""
     if re.match(r"[a-zA-Z][a-zA-Z0-9+.-]*://[^\s(\[]+$", text):
         return True
-    return text.startswith(("/", "~")) or ("/" in text and Path(text).exists())
+    if not text.strip("/~. ") or "/" not in text and not text.startswith("~"):
+        return False
+    try:
+        return Path(text).expanduser().exists()
+    except (OSError, ValueError):
+        return False
 
 
 def check_reads(plans, sources):

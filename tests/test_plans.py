@@ -222,8 +222,9 @@ def test_plans_read_only_task_sources(tmp_path):
     with skrub.config_context(eager_data_ops=False):
         rows = skrub.as_data_op(str(task / "rows.csv")).skb.apply_func(pd.read_csv)
         hosts = rows["a"].astype(str).str.extract(r"^[a-zA-Z][a-zA-Z0-9+.-]*://([^/]+)", expand=False)
+        parts = rows["a"].astype(str).str.split("/").str[0] + "/" + rows["a"].astype(str)
         remote = skrub.as_data_op("gs://bucket/data/part.parquet").skb.apply_func(pd.read_parquet)
-        check_reads([rows, hosts, remote], sources)
+        check_reads([rows, hosts, parts, remote], sources)
         reused = skrub.as_data_op(str(earlier)).skb.apply_func(pd.read_csv)
         with pytest.raises(ValueError, match="read only task sources"):
             check_reads([reused], sources)
