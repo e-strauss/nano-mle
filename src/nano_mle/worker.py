@@ -124,7 +124,7 @@ def audit_outputs(audit):
     return audit
 
 
-def probe(result, contract, request, directory, phases, started):
+def probe(result, contract, request, directory, phases, started, keys=None):
     """Fit one configuration on the locked folds and save its out-of-fold predictions.
 
     Evidence only: no candidate and no search reward. Predictions are captured by
@@ -161,9 +161,7 @@ def probe(result, contract, request, directory, phases, started):
         table = pd.concat([pd.DataFrame({"row": c["row"], "fold": c["fold"], "y": cell(c["y"]),
                                          "prediction": cell(c["prediction"])}) for c in captured])
         table = table.sort_values("row").reset_index(drop=True)
-        if result.get("row_keys") is not None:
-            with skrub.config_context(eager_data_ops=False):
-                keys = result["row_keys"].skb.eval()
+        if keys is not None:  # evaluated once by the boundary audit
             table.insert(1, "row_key", np.asarray(keys)[table["row"].to_numpy()])
         table.to_parquet(directory / "oof_predictions.parquet", index=False)
     folds = [float(search.cv_results_[f"split{k}_test_score"][0]) for k in range(len(frozen))]
@@ -203,7 +201,8 @@ def execute(request, directory, phases):
     if request["kind"] == "evaluation":
         # Checked before the boundary audit, which can take minutes on large data.
         audit = audit_outputs(result.get("audit"))
-    snapshot = audit_boundary(result, contract, phases)
+    evaluated = {}
+    snapshot = audit_boundary(result, contract, phases, values=evaluated)
     (directory / "evaluation.graph.json").write_text(json.dumps(snapshot["boundary_graph"], indent=2))
     if request["kind"] == "evaluation":
         with phases("write_folds"):
@@ -218,7 +217,7 @@ def execute(request, directory, phases):
     if contract is None:
         raise ValueError("Scoring requires an audited, locked evaluation setup")
     if request["kind"] == "probe":
-        return probe(result, contract, request, directory, phases, started)
+        return probe(result, contract, request, directory, phases, started, evaluated.get("row_keys"))
     pred = result["pred"]
     with phases("graph_artifact", output="pipeline"):
         graph_artifact(pred, directory / "pipeline")

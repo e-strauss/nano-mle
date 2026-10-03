@@ -61,13 +61,17 @@ def describe_boundary(result, contract=None):
     return roots, components, canonical_graph(roots)
 
 
-def audit_boundary(result, contract=None, phases=None):
+def audit_boundary(result, contract=None, phases=None, values=None):
+    """Audit the evaluation boundary. `values`, if given, receives the evaluated
+    X, y, row_keys, ... so callers need not evaluate the boundary graph again."""
     phases = phases or NullPhases()
     with phases("audit_fingerprint"):
         roots, components, graph = describe_boundary(result, contract)
     with phases("audit_eval_xy"):
         # Eager: reads sources and builds the population, labels, CV and row keys.
         evaluated = skrub.as_data_op({k: v for k, v in roots.items() if k != "scoring"}).skb.eval()
+    if values is not None:
+        values.update(evaluated)
     with phases("audit_checks"):
         return _check_boundary(evaluated, roots, components, graph, contract)
 
