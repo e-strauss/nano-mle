@@ -3,8 +3,8 @@
 # Each run records the configuration it used in its workspace metadata.
 
 [execution]
-# Total CPU threads one attempt may use (BLAS/OpenMP: numpy, LightGBM, XGBoost, torch).
-# 0 means all cores.
+# Cores the workers may use; 0 means all. Workers are pinned to the first cpu_threads
+# cores, so this holds even when a plan sets n_jobs=-1, and concurrent runs share them.
 cpu_threads = 32
 # Grid-search variants/folds fitted in parallel processes. Each parallel fit gets
 # cpu_threads // grid_n_jobs threads. Every job receives its own copy of X and y,

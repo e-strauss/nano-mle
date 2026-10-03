@@ -77,7 +77,7 @@ the configuration it used in its workspace metadata.
 
 | Setting | Default | Effect |
 |---|---|---|
-| `[execution] cpu_threads` | 32 | Threads one attempt may use (OpenMP/BLAS for numpy, LightGBM, XGBoost, torch); 0 means all cores. |
+| `[execution] cpu_threads` | 32 | Cores the workers may use; 0 means all. Workers are pinned to the first `cpu_threads` cores, a hard cap even when a plan sets `n_jobs=-1`; concurrent runs share those cores. OpenMP/BLAS thread counts are set to match. |
 | `[execution] grid_n_jobs` | 1 | Fits run in parallel processes by the grid search; each gets `cpu_threads // grid_n_jobs` threads and its own copy of X and y, so values above 1 only pay off for small data. Probes fit sequentially with all threads. |
 | `[plans] restrict_primitives` | false | Limit `apply_func` to the curated primitives in `graphs.PRIMITIVES`. Disabled for now, so plans may call any library function; plan-defined functions and lambdas are rejected either way. |
 | `[prompts] data_volume_study` | true | Adds the data-volume-study convention for the planner and controller: for large sources, explore which rows and table parts are needed before the lock, and measure a learning curve over training-set size after it. |

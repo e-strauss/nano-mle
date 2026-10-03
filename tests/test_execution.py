@@ -85,3 +85,18 @@ def build():
 ''')
     svg = draw_svg(attempt)
     assert b"<svg" in svg and b"Ridge" in svg
+
+
+
+def test_workers_are_pinned_to_cpu_threads_cores():
+    import os
+    import subprocess
+    import sys
+    from nano_mle.config import cpu_threads
+    from nano_mle.execution import allowed_cores, pin
+
+    assert len(allowed_cores()) == min(cpu_threads(), len(os.sched_getaffinity(0)))
+    one = {min(os.sched_getaffinity(0))}
+    out = subprocess.run([sys.executable, "-c", "import os; print(len(os.sched_getaffinity(0)))"],
+                         capture_output=True, text=True, preexec_fn=pin(one), check=True)
+    assert out.stdout.strip() == "1"

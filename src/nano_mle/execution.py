@@ -11,6 +11,17 @@ from pathlib import Path
 from .config import cpu_threads, grid_n_jobs
 
 
+def allowed_cores():
+    """The first cpu_threads cores this process may use. Workers are pinned to them, so
+    libraries that size thread pools from the core count (n_jobs=-1) stay inside."""
+    available = sorted(os.sched_getaffinity(0))
+    return set(available[:cpu_threads()])
+
+
+def pin(cores):
+    return lambda: os.sched_setaffinity(0, cores)
+
+
 def threads_per_fit(kind):
     """Pipelines fit grid_n_jobs folds/variants at once and split the threads among them."""
     return max(1, cpu_threads() // grid_n_jobs()) if kind == "pipeline" else cpu_threads()
@@ -26,8 +37,10 @@ def run_plan(directory: Path, source: str, request: dict, timeout: int):
                 "OPENBLAS_NUM_THREADS": threads, "MKL_NUM_THREADS": threads})
     started = time.monotonic()
     with (directory / "execution.log").open("w") as log:
+        cores = allowed_cores()
         child = subprocess.Popen([sys.executable, "-m", "nano_mle.worker", str(directory)],
-                                 cwd=directory, env=env, stdout=log, stderr=log, start_new_session=True)
+                                 cwd=directory, env=env, stdout=log, stderr=log, start_new_session=True,
+                                 preexec_fn=pin(cores))
         try:
             child.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
