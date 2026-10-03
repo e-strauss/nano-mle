@@ -156,6 +156,8 @@ function summarize(ws: Workspace, id: string): RunSummary {
     { name: "evaluations", used: c.evaluations, limit: budget.max_evaluations ?? null },
     { name: "probes", used: c.probes, limit: budget.max_probes ?? null },
     { name: "repairs", used: c.repairs, limit: null },
+    { name: "minutes", used: Math.round(Number(ws.meta.elapsed_s ?? 0) / 60),
+      limit: budget.max_wall_seconds ? Math.round(budget.max_wall_seconds / 60) : null },
   ];
   const valid = ws.of("candidate").filter((x) => x.status === "ok" && typeof x.score === "number");
   const best = valid.reduce<Rec | undefined>((b, x) => (!b || x.score > b.score ? x : b), undefined);
