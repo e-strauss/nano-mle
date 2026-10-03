@@ -89,3 +89,5 @@ class Budget(Model):
     max_repairs: int = Field(default=2, ge=0)
     execution_timeout: int = Field(default=120, ge=1)
     max_model_calls: int = Field(default=80, ge=1)
+    # End-to-end wall time over all sessions of the run; None means unlimited.
+    max_wall_seconds: int | None = Field(default=None, ge=1)

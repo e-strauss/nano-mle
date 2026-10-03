@@ -5,6 +5,15 @@ import json
 from pathlib import Path
 
 
+def duration(text):
+    """Seconds from '3600', '90m', '8h' or '1d'."""
+    units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    text = text.strip().lower()
+    if text[-1:] in units:
+        return int(float(text[:-1]) * units[text[-1]])
+    return int(text)
+
+
 def load_task(path):
     from .models import Task
 
@@ -31,6 +40,7 @@ def main():
     init.add_argument("--max-probes", type=int, default=4)
     init.add_argument("--max-model-calls", type=int, default=80)
     init.add_argument("--execution-timeout", type=int, default=120)
+    init.add_argument("--time-budget", type=duration, help="End-to-end run time, e.g. 8h, 90m or 3600 (seconds)")
     run = sub.add_parser("run", help="Run/resume a workspace using the explicitly supplied model (API calls)")
     run.add_argument("workspace", type=Path)
     run.add_argument("--model", required=True, help="DSPy/LiteLLM model ID, e.g. gemini/gemini-3.8-flash")
@@ -63,7 +73,7 @@ def main():
                         max_evaluation_setups=args.max_evaluation_setups,
                         max_repairs=args.max_repairs, max_probes=args.max_probes,
                         execution_timeout=args.execution_timeout,
-                        max_model_calls=args.max_model_calls)
+                        max_model_calls=args.max_model_calls, max_wall_seconds=args.time_budget)
         initialize(args.workspace.resolve(), load_task(args.task), budget, args.policy)
         print(f"Initialized {args.workspace.resolve()}")
     elif args.command == "run":

@@ -299,3 +299,60 @@ def test_malformed_model_answer_is_retried_with_its_error(workspace):
     assert backend.errors_seen and "probe needs a question" in backend.errors_seen[0]
     failed = [c for c in store.records("model_call") if c["status"] == "failed"]
     assert len(failed) == 1 and store.meta("state") == "complete"
+
+
+class TimeRecorder(ScriptedBackend):
+    """Records the controller's time context; writing a plan takes `delay` seconds."""
+
+    def __init__(self, delay=0.0):
+        self.delay = delay
+        self.times = []
+
+    def control(self, context):
+        self.times.append(context["time"])
+        return super().control(context)
+
+    def implement(self, kind, context, intent):
+        import time
+        time.sleep(self.delay)
+        return super().implement(kind, context, intent)
+
+
+def test_time_budget_stops_the_run_and_the_controller_sees_time(tmp_path):
+    train = tmp_path / "train.csv"
+    pd.DataFrame({"a": range(18), "target": [2 * i + 0.1 for i in range(18)]}).to_csv(train, index=False)
+    task = Task(description="Independent regression data", sources={"train": str(train)}, target="target")
+    root = tmp_path / "workspace"
+    initialize(root, task, Budget(max_expansions=2, max_evaluations=4, max_repairs=0, max_wall_seconds=1))
+    backend = TimeRecorder(delay=1.5)
+    Runner(root, backend).run()
+    store = Store(root)
+    first = backend.times[0]
+    assert first["budget_s"] == 1 and first["remaining_s"] <= 1 and first["typical_attempt_s"] == {}
+    import sqlite3
+    db = sqlite3.connect(root / "state.db")
+    reasons = [json.loads(p)["reason"] for (p,) in db.execute("select payload from events where kind = 'stopped'")]
+    assert reasons == ["Time budget exhausted"]
+    assert store.meta("elapsed_s") >= 1.5 and len(store.records("exploration")) == 1
+
+
+def test_time_context_reports_typical_attempt_durations(workspace):
+    backend = TimeRecorder()
+    Runner(workspace, backend).run()
+    last = backend.times[-1]
+    assert last["budget_s"] is None and last["remaining_s"] is None and last["elapsed_s"] >= 0
+    assert {"exploration", "expansion"} <= set(last["typical_attempt_s"])
+
+
+def test_attempt_timeout_never_exceeds_the_remaining_time(workspace):
+    runner = Runner(workspace, ScriptedBackend())
+    runner.budget = runner.budget.model_copy(update={"execution_timeout": 600, "max_wall_seconds": 100})
+    assert runner.attempt_timeout() <= 100
+    runner.budget = runner.budget.model_copy(update={"max_wall_seconds": None})
+    assert runner.attempt_timeout() == 600
+
+
+def test_time_budget_parses_units():
+    from nano_mle.cli import duration
+
+    assert [duration(t) for t in ("3600", "90m", "8h", "1d", "45s")] == [3600, 5400, 28800, 86400, 45]

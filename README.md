@@ -48,7 +48,7 @@ uv run pytest      # offline test suite
    ```bash
    uv run nano-mle init workspaces/my-run --task task.json --policy greedy \
      --max-model-calls 30 --max-expansions 3 --max-explorations 4 \
-     --max-evaluations 8 --max-repairs 2 --execution-timeout 1800
+     --max-evaluations 8 --max-repairs 2 --execution-timeout 1800 --time-budget 8h
    uv run nano-mle run workspaces/my-run --model openai/gpt-6.1-sol
    uv run nano-mle show workspaces/my-run
    uv run nano-mle draw workspaces/my-run/artifacts/<step>/<attempt> > graph.svg
@@ -132,8 +132,16 @@ gets the source and traceback and may fix it, up to `--max-repairs` times. A
 repair must keep the planned experiment; a different hypothesis needs a new proposal.
 
 Budgets cover controller actions, model calls (counted before dispatch, including
-failures), explorations, setup attempts, expansions, scored variants, probes, repairs
-and execution time. They bound call volume, not dollar cost.
+failures), explorations, setup attempts, expansions, scored variants, probes, repairs,
+per-attempt execution time and, with `--time-budget`, end-to-end run time. They bound
+call volume and time, not dollar cost.
+
+**Time budget.** Elapsed time is summed over the run's sessions; time while a run is
+stopped does not count. The run stops once the budget is spent, and no attempt may run
+past it: its timeout is the smaller of `--execution-timeout` and the remaining time.
+The controller and planner see `context.time` (budget, elapsed and remaining seconds,
+and the median attempt duration per kind in this run) and are asked to choose and size
+actions that fit.
 
 ## Plans
 

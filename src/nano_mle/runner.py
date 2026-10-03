@@ -3,6 +3,8 @@
 import fcntl
 import json
 import shutil
+import statistics
+import time
 from pathlib import Path
 
 from .config import load_config
@@ -43,6 +45,7 @@ def export_workspace(store):
     candidates = store.records("candidate")
     metadata = {"task": store.meta("task"), "sources": store.meta("sources"),
                 "budget": store.meta("budget"), "policy": store.meta("policy"), "model": store.meta("model"), "config": store.meta("config"),
+                "elapsed_s": store.meta("elapsed_s"),
                 "state": store.meta("state"), "evaluation": store.meta("contract")}
     (workspace / "workspace.json").write_text(json.dumps(metadata, indent=2))
     graph = {"root": "root", "candidates": candidates,
@@ -52,7 +55,8 @@ def export_workspace(store):
              "search_stats": store.meta("search_stats")}
     (workspace / "graph.json").write_text(json.dumps(graph, indent=2))
     lines = ["# Experiment report", "",
-             f"Policy: {store.meta('policy')}; model: {store.meta('model')}; state: {store.meta('state')}", "",
+             f"Policy: {store.meta('policy')}; model: {store.meta('model')}; state: {store.meta('state')}; "
+             f"elapsed: {round(store.meta('elapsed_s', 0) / 60)} min", "",
              "| Candidate | Parent | Status | Score | Configuration |", "|---|---|---|---:|---|"]
     for candidate in sorted(candidates, key=lambda c: c["score"] if c["score"] is not None else float("-inf"), reverse=True):
         lines.append(f"| {candidate['id']} | {candidate['parent_id']} | {candidate['status']} | "
@@ -101,6 +105,31 @@ class Runner:
         self.budget = Budget.model_validate(self.store.meta("budget"))
         self.policy = policy(self.store.meta("policy"), self.budget.max_expansions)
         self.notify = print
+        self._clock = None
+
+    def tick(self):
+        """Add this session's time since the last tick to the run's elapsed wall time."""
+        now = time.monotonic()
+        if self._clock is not None:
+            self.store.set_meta("elapsed_s", self.store.meta("elapsed_s", 0.0) + now - self._clock)
+        self._clock = now
+        return self.store.meta("elapsed_s", 0.0)
+
+    def remaining_seconds(self):
+        if self.budget.max_wall_seconds is None:
+            return None
+        return self.budget.max_wall_seconds - self.tick()
+
+    def time_context(self):
+        """Elapsed and remaining run time and typical attempt durations in this run."""
+        durations = {}
+        for attempt in self.store.records("attempt"):
+            if attempt.get("wall_s") is not None:
+                durations.setdefault(attempt["owner_id"].rsplit("_", 1)[0], []).append(attempt["wall_s"])
+        remaining = self.remaining_seconds()
+        return {"budget_s": self.budget.max_wall_seconds, "elapsed_s": round(self.tick()),
+                "remaining_s": None if remaining is None else max(0, round(remaining)),
+                "typical_attempt_s": {kind: round(statistics.median(values)) for kind, values in durations.items()}}
 
     def counts(self):
         return {"evaluation_setups": len(self.store.records("evaluation_setup")), "explorations": len(self.store.records("exploration")),
@@ -132,7 +161,7 @@ class Runner:
                                       **{k: r["result"]["probe"][k] for k in ("rows", "columns", "fold_scores", "score", "preview", "summary")
                                          if k in r["result"]["probe"]}}
                                      for r in self.store.records("probe") if r.get("status") == "ok"],
-                   "requested_explorations": requested, "parent": None}
+                   "requested_explorations": requested, "parent": None, "time": self.time_context()}
         if selection:
             context["selection"] = {"parent_id": selection.parent_id, "reference_ids": selection.reference_ids}
             context["requested_explorations_remaining"] = self.budget.max_requested_explorations - requested
@@ -186,6 +215,13 @@ class Runner:
         self.store.event("model_call_finished", id=call_id, method=method)
         return result
 
+    def attempt_timeout(self):
+        """An attempt may not run past the run's time budget."""
+        remaining = self.remaining_seconds()
+        if remaining is None:
+            return self.budget.execution_timeout
+        return max(1, min(self.budget.execution_timeout, int(remaining)))
+
     def execute(self, kind, record, context, intent, source=None):
         if source is None:
             source = self.call("implement", kind=kind, context=context, intent=intent)
@@ -208,7 +244,7 @@ class Runner:
             self.store.put("attempt", attempt)
             try:
                 validate_source(source)
-                result = run_plan(directory, source, request, self.budget.execution_timeout)
+                result = run_plan(directory, source, request, self.attempt_timeout())
             except (SyntaxError, ValueError) as error:
                 if isinstance(error, MissingLibrary):
                     record_missing(error.modules, self.workspace, record["id"])
@@ -217,7 +253,8 @@ class Runner:
                 (directory / "plan.py").write_text(source)
                 result = {"status": "failed", "error": str(error), "evaluation_count": 0}
                 (directory / "response.json").write_text(json.dumps(result))
-            attempt.update(status=result["status"], evaluation_count=result.get("evaluation_count", 0))
+            attempt.update(status=result["status"], evaluation_count=result.get("evaluation_count", 0),
+                           wall_s=result.get("wall_s"))
             if result.get("warning"):
                 attempt.update(warning=result["warning"], changed_components=result.get("changed_components"))
             self.store.put("attempt", attempt)
@@ -423,9 +460,14 @@ class Runner:
                 self.store.set_meta("config", load_config())
                 self.store.event("run_started", model=model, config=load_config())
                 self.store.set_meta("state", "running")
+                self.tick()  # time while the run was stopped does not count
                 while self.counts()["actions"] < self.budget.max_actions:
                     if self.counts()["evaluations"] >= self.budget.max_evaluations:
                         self.store.event("stopped", reason="Evaluation budget exhausted")
+                        break
+                    remaining = self.remaining_seconds()
+                    if remaining is not None and remaining <= 0:
+                        self.store.event("stopped", reason="Time budget exhausted")
                         break
                     self.store.set_meta("actions", self.counts()["actions"] + 1)
                     decision = self.call("control", context=self.context())
@@ -459,4 +501,6 @@ class Runner:
                 export_workspace(self.store)
             raise
         finally:
+            if owns_lock:
+                self.tick()
             self.store.close()

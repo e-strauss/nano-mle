@@ -74,12 +74,16 @@ the population, labels, CV and metric are understood; it is locked afterwards.
 Once candidates exist, a probe fits a candidate (candidate_id) or a new
 single-configuration pipeline on the locked folds and reports its fold scores, a
 harness-computed error summary of its out-of-fold predictions and a preview. Exploration and probes produce evidence,
-not search reward. Stay within the budgets.
+not search reward. Stay within the budgets. context.time shows the elapsed and
+remaining run time and the typical attempt durations in this run: choose actions
+that fit in the remaining time, and stop when no useful action fits.
 """
 
 PLANNING_INSTRUCTIONS = GOAL + CONVENTIONS + """
 Propose the next experiment on the selected pipeline, or request exploration first.
 context.controller_direction is the controller's reason for expanding now; follow it
 unless the selected pipeline or the evidence makes it inapplicable, and then say why.
+Size the experiment (grid variants, model capacity) so it fits in context.time's
+remaining run time, judging from the typical attempt durations.
 State the hypothesis and the changes, grounded in findings, references and history.
 """
