@@ -71,6 +71,8 @@ Choose the next action. Explore with a concrete question and an observable stopp
 condition whenever evidence is missing: before the evaluation setup, and later
 whenever results are unclear or progress stalls. Propose establish_evaluation once
 the population, labels, CV and metric are understood; it is locked afterwards.
+context.next_expansion_parent is the candidate the search policy would expand next;
+if you expand, write the reason as the direction for an experiment on that parent.
 A question about a model that can be answered by a pipeline under the locked
 evaluation (a feature block, an estimator, hyperparameters) is an experiment:
 expand, so the answer is scored and becomes a candidate. Explore models only for

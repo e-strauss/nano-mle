@@ -352,6 +352,24 @@ class Runner:
         self.notify(f"Locked {locked}: {contract['rows']} rows")
         export_workspace(self.store)
 
+    def peek(self):
+        """The parent the search policy would expand next. Selection has no side effects
+        (statistics change only after an expansion), so peeking before the controller
+        call and selecting at expansion time agree."""
+        return self.policy.select(self.store.records("candidate"), self.store.meta("search_stats"),
+                                  self.counts()["expansions"])
+
+    def next_parent_context(self):
+        if self.store.meta("contract") is None:
+            return None
+        selection = self.peek()
+        if selection.parent_id == "root":
+            return {"id": "root", "note": "a new pipeline from the locked evaluation"}
+        parent = self.store.get(selection.parent_id)
+        return {"id": parent["id"], "score": parent.get("score"), "fold_scores": parent.get("fold_scores"),
+                "configuration": parent.get("configuration_description"),
+                "description": parent.get("description"), "reference_ids": selection.reference_ids}
+
     def expand(self, direction=None):
         contract = self.store.meta("contract")
         if contract is None:
@@ -361,7 +379,7 @@ class Runner:
         if counts["expansions"] >= self.budget.max_expansions or counts["evaluations"] >= self.budget.max_evaluations:
             raise ValueError("Search budget exhausted")
         old_candidates = self.store.records("candidate")
-        selection = self.policy.select(old_candidates, self.store.meta("search_stats"), counts["expansions"])
+        selection = self.peek()
         record = {"id": new_id("expansion"), "parent_id": selection.parent_id,
                   "reference_ids": selection.reference_ids, "status": "running", "attempt_ids": [],
                   "exploration_ids": [], "direction": direction}
@@ -470,7 +488,9 @@ class Runner:
                         self.store.event("stopped", reason="Time budget exhausted")
                         break
                     self.store.set_meta("actions", self.counts()["actions"] + 1)
-                    decision = self.call("control", context=self.context())
+                    context = self.context()
+                    context["next_expansion_parent"] = self.next_parent_context()
+                    decision = self.call("control", context=context)
                     self.store.event("controller_decision", **decision.model_dump())
                     if decision.action == "stop":
                         self.store.event("stopped", reason=decision.reason)

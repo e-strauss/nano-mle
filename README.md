@@ -98,7 +98,7 @@ A single controller loop chooses one action at a time:
 |---|---|---|
 | `explore` | The writer produces a graph answering a concrete question; outputs are evaluated and an interpreter turns them into scoped findings. It may fit models for quick evidence, but never produces candidates. | No |
 | `establish_evaluation` | The writer constructs the modelling population, raw labels, CV and scorer. The harness audits and locks them. | No |
-| `expand` | The search policy selects a parent; the planner proposes a bounded change (or requests an exploration first); the writer implements it; every grid variant is scored and becomes its own candidate (`<expansion>_variant_N`, shown as v1, v2, …), which later expansions can select as a parent with its grid values resolved. | Yes |
+| `expand` | The search policy selects a parent (peeked before the controller call, so the controller's reason is written for it); the planner proposes a bounded change (or requests an exploration first); the writer implements it; every grid variant is scored and becomes its own candidate (`<expansion>_variant_N`, shown as v1, v2, …), which later expansions can select as a parent with its grid values resolved. | Yes |
 | `probe` | Fits one configuration (an existing candidate, or a pipeline the writer builds) on the locked folds and reports its fold scores and a harness-computed error summary of its out-of-fold predictions. | No |
 | `stop` | Ends the run. | |
 
@@ -107,7 +107,7 @@ Who decides what, compared with a single-agent harness such as mle-claude:
 | Decision | mle-claude | nano-mle |
 |---|---|---|
 | Next action (explore, lock evaluation, expand, probe, stop) | LLM | LLM controller |
-| Which candidate to build on | LLM | search policy (greedy / MCTS / MCGS) |
+| Which candidate to build on | LLM | search policy (greedy / MCTS / MCGS); the controller sees its pick before deciding |
 | What to change in the experiment | LLM | LLM planner, given the selected node and the controller's reason for expanding |
 | Writing and fixing code | LLM | LLM writer / repairer |
 | Turning outputs into findings | LLM | LLM interpreter |

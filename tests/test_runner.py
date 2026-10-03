@@ -356,3 +356,35 @@ def test_time_budget_parses_units():
     from nano_mle.cli import duration
 
     assert [duration(t) for t in ("3600", "90m", "8h", "1d", "45s")] == [3600, 5400, 28800, 86400, 45]
+
+
+class ParentRecorder(ScriptedBackend):
+    """Records the parent the controller is shown and the parent the planner gets."""
+
+    def __init__(self):
+        self.shown, self.planned = [], []
+
+    def control(self, context):
+        decision = super().control(context)
+        if decision.action == "expand":
+            self.shown.append(context["next_expansion_parent"]["id"])
+        return decision
+
+    def plan(self, context):
+        self.planned.append(context["selection"]["parent_id"])
+        return super().plan(context)
+
+
+@pytest.mark.parametrize("search_policy", ["greedy", "mcts", "mcgs"])
+def test_controller_sees_the_parent_the_expansion_uses(tmp_path, search_policy):
+    train = tmp_path / "train.csv"
+    pd.DataFrame({"a": range(18), "b": [1, 2, 3] * 6,
+                  "target": [2 * i + 0.1 for i in range(18)]}).to_csv(train, index=False)
+    task = Task(description="Independent regression data", sources={"train": str(train)}, target="target")
+    root = tmp_path / "workspace"
+    initialize(root, task, Budget(max_expansions=2, max_evaluations=4, max_repairs=0), search_policy)
+    backend = ParentRecorder()
+    Runner(root, backend).run()
+    expansions = Store(root).records("expansion")
+    assert backend.shown == [e["parent_id"] for e in expansions] and len(expansions) == 2
+    assert set(backend.planned) <= set(backend.shown)
