@@ -7,6 +7,7 @@ semantic equivalence, and performs no execution optimization.
 import ast
 import inspect
 import math
+import re
 import textwrap
 from collections.abc import Mapping
 from pathlib import Path
@@ -84,6 +85,46 @@ def class_methods(cls):
     """Source fingerprint of a plan-defined class, so edits to it count as drift."""
     return {name: ast.dump(ast.parse(textwrap.dedent(inspect.getsource(method))))
             for name, method in vars(cls).items() if inspect.isfunction(method)}
+
+
+def _strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, Mapping):
+        for item in value.values():
+            yield from _strings(item)
+    elif isinstance(value, (tuple, list)):
+        for item in value:
+            yield from _strings(item)
+
+
+def _looks_like_path(text):
+    if re.match(r"[a-zA-Z][a-zA-Z0-9+.-]*://[^\s(\[]+$", text):
+        return True
+    return text.startswith(("/", "~")) or ("/" in text and Path(text).exists())
+
+
+def check_reads(plans, sources):
+    """Every file or URL a plan names must be a task source (or lie inside a source
+    directory). Files written by earlier steps are never inputs: recompute instead."""
+    from skrub._data_ops._evaluation import graph
+
+    allowed = [str(s["path"]) for s in sources.values()]
+
+    def is_source(text):
+        if "://" in text:
+            return any(text == a or text.startswith(a.rstrip("/") + "/") for a in allowed)
+        resolved = Path(text).expanduser().resolve()
+        return any(resolved == Path(a) or Path(a) in resolved.parents for a in allowed if "://" not in a)
+
+    for plan in plans:
+        for node in graph(plan)["nodes"].values():
+            impl = node._skrub_impl
+            for field in impl._fields:
+                for text in _strings(getattr(impl, field)):
+                    if _looks_like_path(text) and not is_source(text):
+                        raise ValueError(f"Plans read only task sources; {text!r} is not one. Files written "
+                                         "by earlier steps are not inputs: recompute what you need in the plan")
 
 
 def canonical_graph(roots):

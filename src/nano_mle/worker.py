@@ -19,7 +19,7 @@ from sklearn.model_selection import ParameterGrid
 from .config import grid_n_jobs
 from .contracts import ContractDrift, contract_folds, save_folds, verify_contract
 from .evaluation import audit_boundary
-from .graphs import validate_graph
+from .graphs import check_reads, validate_graph
 from .plans import validate_source
 from .timing import Phases
 
@@ -185,6 +185,12 @@ def execute(request, directory, phases):
     with phases("build_graph"), skrub.config_context(eager_data_ops=False):
         exec(compile(source, str(directory / "plan.py"), "exec"), namespace)
         result = namespace["build"]()
+    if isinstance(result, dict):
+        values = list(result.values())
+        if isinstance(result.get("audit"), dict):
+            values += list(result["audit"].values())
+        with phases("check_reads"):
+            check_reads([v for v in values if isinstance(v, skrub.DataOp)], request["sources"])
     if request["kind"] == "exploration":
         if not isinstance(result, dict) or not result:
             raise ValueError("Exploration must return a nonempty dict of named DataOp outputs")

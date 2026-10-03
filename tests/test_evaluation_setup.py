@@ -35,7 +35,7 @@ def build():
     return {{'X':X, 'y':y, 'row_keys':population[['bbl','cutoff']], 'scoring':'neg_mean_absolute_error',
             'audit': population.groupby('cutoff').size()}}
 '''
-    setup = run_plan(tmp_path/'setup',source,{'kind':'evaluation'},60)
+    setup = run_plan(tmp_path/'setup',source,{'sources': {'tmp': {'path': str(tmp_path)}}, 'kind':'evaluation'},60)
     assert setup['status'] == 'ok', setup
     assert setup['snapshot']['rows'] == 8
     assert setup['snapshot']['audit']['folds'] == 2 and (tmp_path / 'setup' / 'folds.npz').exists()
@@ -48,7 +48,7 @@ def build():
     pred = setup['X'].drop(columns=['bbl']).skb.apply(Ridge(), y=setup['y'])
     return {'pred':pred, 'scoring':setup['scoring'], 'row_keys':setup['row_keys']}
 '''
-    scored = run_plan(tmp_path/'candidate',candidate,{'kind':'pipeline','contract':contract,'folds_path':str(tmp_path/'setup'/'folds.npz'),'remaining_evaluations':1},60)
+    scored = run_plan(tmp_path/'candidate',candidate,{'sources': {'tmp': {'path': str(tmp_path)}}, 'kind':'pipeline','contract':contract,'folds_path':str(tmp_path/'setup'/'folds.npz'),'remaining_evaluations':1},60)
     assert scored['status'] == 'ok', scored
     assert scored['evaluation_count'] == 1
 
@@ -66,7 +66,7 @@ def build():
     y = data['target'].skb.mark_as_y()
     return {{'X': X, 'y': y, 'scoring': 'neg_mean_absolute_error'}}
 '''
-    setup = run_plan(tmp_path / 'setup', source, {'kind': 'evaluation'}, 60)
+    setup = run_plan(tmp_path / 'setup', source, {'sources': {'tmp': {'path': str(tmp_path)}}, 'kind': 'evaluation'}, 60)
     assert setup['status'] == 'ok', setup
     contract = create_contract(setup['snapshot'], evaluation_source(source),
                                EvaluationSpec(scoring='neg_mean_absolute_error', rationale='iid rows'))
@@ -78,7 +78,7 @@ def build():
     return {'pred': setup['X'].skb.apply(model, y=setup['y']), 'scoring': setup['scoring']}
 '''
     scored = run_plan(tmp_path / 'candidate', candidate,
-                      {'kind': 'pipeline', 'contract': contract, 'folds_path': str(tmp_path / 'setup' / 'folds.npz'), 'remaining_evaluations': 2}, 60)
+                      {'sources': {'tmp': {'path': str(tmp_path)}}, 'kind': 'pipeline', 'contract': contract, 'folds_path': str(tmp_path / 'setup' / 'folds.npz'), 'remaining_evaluations': 2}, 60)
     assert scored['status'] == 'ok', scored
     timings = scored['timings']
     names = [p['phase'] for p in timings['phases']]
@@ -100,7 +100,7 @@ def build():
 
 def test_timeout_reports_phase_in_progress(tmp_path):
     source = "import numpy as np\ndef build():\n    while True:\n        np.zeros(1)\n"
-    result = run_plan(tmp_path / 'slow', source, {'kind': 'exploration'}, 8)
+    result = run_plan(tmp_path / 'slow', source, {'sources': {'tmp': {'path': str(tmp_path)}}, 'kind': 'exploration'}, 8)
     assert result['status'] == 'failed' and 'timed out' in result['error']
     assert result['timings']['in_progress'] == 'build_graph'
 
@@ -131,7 +131,7 @@ def build():
     y = data['target'].skb.mark_as_y()
     return {{'X': X, 'y': y, 'scoring': top_k_recall}}
 '''
-    setup = run_plan(tmp_path / 'setup', source, {'kind': 'evaluation', 'expected_scoring': 'recall@2'}, 60)
+    setup = run_plan(tmp_path / 'setup', source, {'sources': {'tmp': {'path': str(tmp_path)}}, 'kind': 'evaluation', 'expected_scoring': 'recall@2'}, 60)
     assert setup['status'] == 'ok', setup
     assert setup['snapshot']['scoring'] == 'custom:top_k_recall'
     contract = create_contract(setup['snapshot'], evaluation_source(source),
@@ -144,12 +144,12 @@ def build():
     return {'pred': pred, 'scoring': setup['scoring']}
 '''
     scored = run_plan(tmp_path / 'candidate', contract['setup_source'] + pipeline,
-                      {'kind': 'pipeline', 'contract': contract, 'folds_path': str(tmp_path / 'setup' / 'folds.npz'), 'remaining_evaluations': 1}, 60)
+                      {'sources': {'tmp': {'path': str(tmp_path)}}, 'kind': 'pipeline', 'contract': contract, 'folds_path': str(tmp_path / 'setup' / 'folds.npz'), 'remaining_evaluations': 1}, 60)
     assert scored['status'] == 'ok', scored
     assert 0 <= scored['variants'][0]['score'] <= 1
     drifted = contract['setup_source'].replace('K = 2', 'K = 3') + pipeline
     rejected = run_plan(tmp_path / 'drift', drifted,
-                        {'kind': 'pipeline', 'contract': contract, 'folds_path': str(tmp_path / 'setup' / 'folds.npz'), 'remaining_evaluations': 1}, 60)
+                        {'sources': {'tmp': {'path': str(tmp_path)}}, 'kind': 'pipeline', 'contract': contract, 'folds_path': str(tmp_path / 'setup' / 'folds.npz'), 'remaining_evaluations': 1}, 60)
     assert rejected['status'] == 'failed' and rejected.get('warning') == 'contract_drift'
     assert 'scoring' in rejected['changed_components']
 
@@ -170,7 +170,7 @@ def build():
     keys = data['g'].astype(str) + ':' + data['t'].astype(str)
     return {{'X': X, 'y': y, 'scoring': 'roc_auc', 'row_keys': keys}}
 '''
-    setup = run_plan(tmp_path / 'setup', source, {'kind': 'evaluation'}, 60)
+    setup = run_plan(tmp_path / 'setup', source, {'sources': {'tmp': {'path': str(tmp_path)}}, 'kind': 'evaluation'}, 60)
     assert setup['status'] == 'ok', setup
     contract = create_contract(setup['snapshot'], evaluation_source(source),
                                EvaluationSpec(scoring='roc_auc', rationale='grouped'))
@@ -182,7 +182,7 @@ def build():
     return {{'pred': pred, 'scoring': setup['scoring'], 'row_keys': setup['row_keys']}}
 '''
     probed = run_plan(tmp_path / 'probe', contract['setup_source'] + body.format(c='1.0'),
-                      {'kind': 'probe', 'contract': contract, 'folds_path': str(tmp_path / 'setup' / 'folds.npz')}, 60)
+                      {'sources': {'tmp': {'path': str(tmp_path)}}, 'kind': 'probe', 'contract': contract, 'folds_path': str(tmp_path / 'setup' / 'folds.npz')}, 60)
     assert probed['status'] == 'ok', probed
     oof = pd.read_parquet(probed['probe']['path'])
     assert list(oof.columns) == ['row', 'row_key', 'fold', 'y', 'prediction']
@@ -190,7 +190,7 @@ def build():
     assert oof.loc[oof['row'] == 7, 'row_key'].item() == '1:2'
     assert probed['evaluation_count'] == 0
     grid = run_plan(tmp_path / 'grid', contract['setup_source'] + body.format(c="skrub.choose_from([0.1, 1.0], name='C')"),
-                    {'kind': 'probe', 'contract': contract, 'folds_path': str(tmp_path / 'setup' / 'folds.npz')}, 60)
+                    {'sources': {'tmp': {'path': str(tmp_path)}}, 'kind': 'probe', 'contract': contract, 'folds_path': str(tmp_path / 'setup' / 'folds.npz')}, 60)
     assert grid['status'] == 'failed' and 'single value' in grid['error']
 
 
@@ -209,7 +209,7 @@ def build():
     X = data.drop(columns=['target']).skb.mark_as_X(cv=KFold(3), split_kwargs={{}})
     return {{'X': X, 'y': data['target'].skb.mark_as_y(), 'scoring': 'r2'}}
 '''
-    setup = run_plan(tmp_path / 'setup', source, {'kind': 'evaluation'}, 60)
+    setup = run_plan(tmp_path / 'setup', source, {'sources': {'tmp': {'path': str(tmp_path)}}, 'kind': 'evaluation'}, 60)
     contract = create_contract(setup['snapshot'], evaluation_source(source),
                                EvaluationSpec(scoring='r2', rationale='iid'), folds_file='folds.npz')
     assert 'splits' not in contract and len(json.dumps(contract)) < 20_000
@@ -237,7 +237,7 @@ def build():
     y = data[['l1', 'l2']].skb.mark_as_y()
     return {{'X': X, 'y': y, 'scoring': 'accuracy'}}
 '''
-    setup = run_plan(tmp_path / 'setup', source, {'kind': 'evaluation'}, 60)
+    setup = run_plan(tmp_path / 'setup', source, {'sources': {'tmp': {'path': str(tmp_path)}}, 'kind': 'evaluation'}, 60)
     assert setup['status'] == 'ok', setup
     contract = create_contract(setup['snapshot'], evaluation_source(source),
                                EvaluationSpec(scoring='accuracy', rationale='multi-output'))
@@ -249,7 +249,7 @@ def build():
             'scoring': setup['scoring']}
 '''
     probed = run_plan(tmp_path / 'probe', contract['setup_source'] + body,
-                      {'kind': 'probe', 'contract': contract, 'folds_path': str(tmp_path / 'setup' / 'folds.npz')}, 60)
+                      {'sources': {'tmp': {'path': str(tmp_path)}}, 'kind': 'probe', 'contract': contract, 'folds_path': str(tmp_path / 'setup' / 'folds.npz')}, 60)
     assert probed['status'] == 'ok', probed
     oof = pd.read_parquet(probed['probe']['path'])
     assert len(oof) == 60 and len(oof['y'][0]) == 2 and len(oof['prediction'][0]) == 2
@@ -267,7 +267,7 @@ def build():
     X = data[['a', 'b']].skb.mark_as_X(cv=KFold(3), split_kwargs={{}})
     return {{'X': X, 'y': data['target'].skb.mark_as_y(), 'scoring': 'roc_auc'}}
 '''
-    setup = run_plan(tmp_path / 'setup', source, {'kind': 'evaluation'}, 60)
+    setup = run_plan(tmp_path / 'setup', source, {'sources': {'tmp': {'path': str(tmp_path)}}, 'kind': 'evaluation'}, 60)
     assert setup['status'] == 'ok', setup
     contract = create_contract(setup['snapshot'], evaluation_source(source),
                                EvaluationSpec(scoring='roc_auc', rationale='kfold'))
@@ -300,7 +300,7 @@ def build():
     return {'pred': features.skb.apply(model, y=setup['y']), 'scoring': setup['scoring']}
 '''
     result = run_plan(tmp_path / 'pipe', contract['setup_source'] + body,
-                      {'kind': 'pipeline', 'contract': contract, 'remaining_evaluations': 4,
+                      {'sources': {'tmp': {'path': str(tmp_path)}}, 'kind': 'pipeline', 'contract': contract, 'remaining_evaluations': 4,
                        'folds_path': str(tmp_path / 'setup' / 'folds.npz')}, 120)
     assert result['status'] == 'ok', result
     assert result['evaluation_count'] == 2

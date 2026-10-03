@@ -91,7 +91,7 @@ A single controller loop chooses one action at a time:
 | `explore` | The writer produces a graph answering a concrete question; outputs are evaluated and an interpreter turns them into scoped findings. | No |
 | `establish_evaluation` | The writer constructs the modelling population, raw labels, CV and scorer. The harness audits and locks them. | No |
 | `expand` | The search policy selects a parent; the planner proposes a bounded change (or requests an exploration first); the writer implements it; every grid variant is scored. | Yes |
-| `probe` | Fits one configuration (an existing candidate, or a pipeline the writer builds) on the locked folds and saves its out-of-fold predictions. Later explorations read them for error analysis. | No |
+| `probe` | Fits one configuration (an existing candidate, or a pipeline the writer builds) on the locked folds and reports its fold scores and a preview of its out-of-fold predictions. | No |
 | `stop` | Ends the run. | |
 
 Every implementation runs in a time-bounded subprocess. If it fails, the repairer
@@ -160,13 +160,16 @@ a custom splitter: by its source plus the plan helpers and upper-case constants 
 harness wraps the locked scorer to capture each test fold's predictions during the
 normal fold loop, so nothing is fitted twice, and writes `oof_predictions.parquet`
 with `row` (position in the locked X), `fold`, `y`, `prediction` (positive-class
-probability where available) and `row_key`. Explorations receive the paths in
-`probe_outputs` and read them like any other source, so error analysis stays a
-fine-grained DataOps graph.
+probability where available) and `row_key`. The file is for people and the
+dashboard: the model sees only the fold scores and a preview in `probe_outputs`.
 
 **Plan rules.** These are enforced by a source lint (`plans.py`) and a runtime graph
 check (`graphs.py`):
 - Readers are recorded with `skrub.as_data_op(path).skb.apply_func(pd.read_csv | pd.read_parquet, ...)`.
+- Plans read only the task sources. Every path or URL in a plan's graph must be a
+  source or lie inside a source directory; files written by earlier steps (outputs,
+  predictions, manifests) are rejected, so anything worth reusing is recomputed. The
+  model context lists task sources but no artifact paths.
 - Computation is expressed as fine-grained DataOps. No UDFs, `deferred`, callable
   `apply`/`map`, eager reads, materialised data, files, or manual fitting in the graph.
 - Custom classes are allowed when they are estimators or transformers (`fit`), torch

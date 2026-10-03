@@ -13,7 +13,9 @@ Plan contract (checked by the harness):
 - Standalone Python with imports, constants, graph-building helpers and one
   zero-argument build(). The harness builds the graph lazily and evaluates it.
 - Record reads: skrub.as_data_op(path).skb.apply_func(pd.read_csv | pd.read_parquet, ...)
-  with columns/filters/sep as needed. Paths come from the task sources.
+  with columns/filters/sep as needed. Plans read only the task sources; files
+  written by earlier steps (outputs, predictions, manifests) are never inputs, so
+  recompute anything you want to reuse in the plan.
 - Compute with fine-grained DataOps: indexing, filters, joins, groupby/agg, assign,
   string/date operations, .skb.concat. Build-time helpers and loops are fine when they
   emit explicit graph nodes.
@@ -39,13 +41,8 @@ Plan contract (checked by the harness):
   X/y/CV/scoring/row-key graphs and the folds with the lock before fitting; drift is
   rejected. Keep the row count and order of X.
 - A probe is written like a pipeline with a single configuration (no choose_from).
-  The harness fits it on the locked folds and saves out-of-fold predictions with
-  columns row (position in the locked X), fold, y, prediction and row_key (if
-  declared). Probes are evidence, not candidates.
-- Explorations may read probe outputs (context.probe_outputs[].path, parquet) as
-  sources, e.g. to join predictions with the locked X or other tables for error
-  analysis. Rebuild X with build_evaluation() from locked_evaluation_source and use
-  its row positions to join.
+  The harness fits it on the locked folds and reports its fold scores and a preview
+  of its out-of-fold predictions. Probes are evidence, not candidates.
 - Named skrub.choose_from grids become one candidate per variant (within the
   evaluation budget). Children receive the parent's resolved configuration.
 - Return code without markdown fences. No credentials, no manual fitting or scoring,

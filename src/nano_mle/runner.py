@@ -77,6 +77,19 @@ def export_workspace(store):
     (workspace / "report.md").write_text("\n".join(lines))
 
 
+FILE_KEYS = {"artifact_path", "artifact", "path", "source_path", "folds_file", "folds_path"}
+
+
+def without_paths(value):
+    """The model sees task sources only; files written by earlier steps stay hidden so
+    plans recompute what they need instead of reading previous outputs."""
+    if isinstance(value, dict):
+        return {k: without_paths(v) for k, v in value.items() if k not in FILE_KEYS}
+    if isinstance(value, list):
+        return [without_paths(v) for v in value]
+    return value
+
+
 class Runner:
     def __init__(self, workspace: Path, backend):
         self.workspace = workspace.resolve()
@@ -116,7 +129,7 @@ class Runner:
                    "recent_explorations": self.store.records("exploration")[-4:],
                    # Out-of-fold predictions explorations may read as sources (parquet).
                    "probe_outputs": [{"id": r["id"], "question": r["question"], "candidate_id": r.get("candidate_id"),
-                                      **{k: r["result"]["probe"][k] for k in ("path", "rows", "columns", "fold_scores", "score")}}
+                                      **{k: r["result"]["probe"][k] for k in ("rows", "columns", "fold_scores", "score", "preview")}}
                                      for r in self.store.records("probe") if r.get("status") == "ok"],
                    "requested_explorations": requested, "parent": None}
         if selection:
@@ -134,7 +147,8 @@ class Runner:
                         break
                     cursor = self.store.get(cursor["parent_id"])
                 context["trajectory"] = list(reversed(trajectory[:6]))
-        return context
+        sources = context.pop("sources")
+        return {**without_paths(context), "sources": sources}
 
     def _candidate_context(self, candidate):
         path = self.workspace / candidate["source_path"]

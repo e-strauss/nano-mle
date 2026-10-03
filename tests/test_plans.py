@@ -207,3 +207,25 @@ def test_data_volume_study_prompt_follows_config(tmp_path, monkeypatch):
     monkeypatch.undo()
     config.load_config.cache_clear()
     importlib.reload(prompts)
+
+
+def test_plans_read_only_task_sources(tmp_path):
+    from nano_mle.graphs import check_reads
+
+    task = tmp_path / "task"
+    task.mkdir()
+    (task / "rows.csv").write_text("a\n1\n")
+    earlier = tmp_path / "workspace" / "artifacts" / "out.csv"
+    earlier.parent.mkdir(parents=True)
+    earlier.write_text("a\n1\n")
+    sources = {"task": {"path": str(task)}, "remote": {"path": "gs://bucket/data"}}
+    with skrub.config_context(eager_data_ops=False):
+        rows = skrub.as_data_op(str(task / "rows.csv")).skb.apply_func(pd.read_csv)
+        hosts = rows["a"].astype(str).str.extract(r"^[a-zA-Z][a-zA-Z0-9+.-]*://([^/]+)", expand=False)
+        remote = skrub.as_data_op("gs://bucket/data/part.parquet").skb.apply_func(pd.read_parquet)
+        check_reads([rows, hosts, remote], sources)
+        reused = skrub.as_data_op(str(earlier)).skb.apply_func(pd.read_csv)
+        with pytest.raises(ValueError, match="read only task sources"):
+            check_reads([reused], sources)
+        with pytest.raises(ValueError, match="read only task sources"):
+            check_reads([skrub.as_data_op("gs://other/x.parquet").skb.apply_func(pd.read_parquet)], sources)

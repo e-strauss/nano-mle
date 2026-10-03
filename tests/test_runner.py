@@ -1,3 +1,4 @@
+from pathlib import Path
 import fcntl
 import json
 import pandas as pd
@@ -214,30 +215,40 @@ class ProbeBackend(DemoBackend):
             return Decision(action="stop", reason="Done")
         return super().control(context)
 
+    def __init__(self, workspace):
+        self.workspace = workspace
+        self.seen = []
+
     def implement(self, kind, context, intent):
+        self.seen.append(context)
         if kind == "exploration" and context["probe_outputs"]:
-            path = repr(context["probe_outputs"][0]["path"])
+            # An agent that found the predictions file anyway must not be able to read it.
+            path = repr(str(next(Path(self.workspace).rglob("oof_predictions.parquet"))))
             return ("import pandas as pd\nimport skrub\n\ndef build():\n"
                     f"    oof = skrub.as_data_op({path}).skb.apply_func(pd.read_parquet)\n"
-                    "    error = (oof['prediction'] - oof['y']).abs()\n"
-                    "    return {'error_summary': error.describe(), 'rows_per_fold': oof.groupby('fold')['row'].count()}\n")
+                    "    return {'rows_per_fold': oof.groupby('fold')['row'].count()}\n")
         return super().implement(kind, context, intent)
 
 
-def test_probe_saves_out_of_fold_predictions_for_explorations(workspace):
-    Runner(workspace, ProbeBackend()).run()
+def test_probe_reports_evidence_but_its_files_are_not_inputs(workspace):
+    backend = ProbeBackend(workspace)
+    Runner(workspace, backend).run()
     store = Store(workspace)
     probes = store.records("probe")
     assert len(probes) == 1 and probes[0]["status"] == "ok", probes
     info = probes[0]["result"]["probe"]
-    oof = pd.read_parquet(info["path"])
+    oof = pd.read_parquet(info["path"])  # kept for people and the dashboard
     assert sorted(oof["row"]) == list(range(18)) and set(oof["fold"]) == {0, 1, 2}
     assert len(info["fold_scores"]) == 3
     # The probe re-ran the candidate's resolved source: no implement call for it.
     calls = [c["method"] for c in store.records("model_call")]
     assert calls.count("implement") == 4  # exploration, setup, expansion, analysis
+    # The model sees fold scores and a preview, never file locations.
+    shown = backend.seen[-1]["probe_outputs"][0]
+    assert "path" not in shown and shown["fold_scores"] == info["fold_scores"] and shown["preview"]
+    assert all("artifact_path" not in json.dumps(c) for c in backend.seen)
     analysis = store.records("exploration")[-1]
-    assert analysis["status"] == "ok" and "rows_per_fold" in analysis["result"]["outputs"]
+    assert analysis["status"] == "failed" and "read only task sources" in analysis["result"]["error"]
     assert store.meta("budget")["max_probes"] == 4
     assert all(c["status"] == "ok" for c in store.records("candidate"))
     assert len(store.records("candidate")) == 1  # probes create no candidates
